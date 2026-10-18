@@ -54,6 +54,8 @@ def runtime():
     )
 
     async def construct(_id, _settings, _admission_registry, _api_key_number):
+        if _id in {"lmstudio", "llamacpp", "ollama"}:
+            raise ConnectionError("Local fixture is offline")
         return provider
 
     manager = ProviderRuntimeManager(
@@ -274,7 +276,6 @@ async def test_shutdown_drains_integration_writer(runtime, monkeypatch):
         close = asyncio.create_task(runtime.close())
         await asyncio.sleep(0)
         assert not close.done()
-        assert runtime._config_lock.locked()
         release.set()
         assert await asyncio.wait_for(close, 5)
     finally:

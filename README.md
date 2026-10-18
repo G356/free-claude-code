@@ -313,6 +313,8 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 <details>
 <summary><strong>Local provider setup</strong></summary>
 
+FCC automatically discovers models from running local servers at startup. If you start a server later, click **Refresh models** in Admin to add its models to the picker.
+
 ### LM Studio
 
 Start LM Studio's local server, load a tool-capable model, and use the model identifier shown by LM Studio with the `lmstudio/` prefix. The default URL is `http://localhost:1234/v1`.
@@ -329,6 +331,8 @@ ollama serve
 ```
 
 Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
+
+Provider cards show the checked endpoint and response time, with a useful message when a local server is unavailable. After starting the server or correcting its settings, click **Test** to refresh its models.
 
 </details>
 
@@ -502,7 +506,7 @@ Uninstalling FCC leaves Muse Code installed.
 
 ### Uninstall
 
-Stop every running FCC command before uninstalling.
+Stop every running FCC command and quit connected desktop/editor apps before uninstalling.
 
 **Removes**
 
