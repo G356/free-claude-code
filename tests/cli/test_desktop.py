@@ -1,6 +1,7 @@
 """Desktop shell lifecycle and singleton contracts."""
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,7 +45,8 @@ def test_supervisor_accepts_restart_during_scheduled_startup() -> None:
         patch("free_claude_code.cli.commands.kill_all_best_effort"),
     ):
         assert supervisor.schedule_run() is True
-        assert supervisor.status is ServerStatus.STARTING
+        initial_status = supervisor.status
+        assert initial_status is ServerStatus.STARTING
         assert supervisor.request_restart() is True
         supervisor.run(open_admin_browser=False)
 
@@ -95,7 +97,7 @@ def test_desktop_controller_owns_server_thread_and_graceful_quit() -> None:
             self.run_thread_id: int | None = None
             self.stop_count = 0
 
-        def run(self, setup) -> None:
+        def run(self, setup: Callable[[], None]) -> None:
             setup()
             self.run_thread_id = threading.get_ident()
             assert supervisor.started.wait(2)
@@ -168,7 +170,7 @@ def test_restart_during_server_startup_is_accepted_without_waiting() -> None:
             self.started = threading.Event()
             self.stopped = threading.Event()
 
-        def run(self, setup) -> None:
+        def run(self, setup: Callable[[], None]) -> None:
             setup()
             self.started.set()
             assert self.stopped.wait(2)
@@ -255,9 +257,13 @@ def test_automatically_started_duplicate_does_not_open_admin(
     ):
         controller.run.side_effect = lambda: shell.call_args.args[3]()
         if loser == "existing_server":
-            supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
-                "existing_server"
-            ](settings)
+
+            def attach_to_existing(
+                *, existing_server: Callable[[Settings], bool], **options: object
+            ) -> bool:
+                return existing_server(settings)
+
+            supervisor.return_value.run.side_effect = attach_to_existing
         desktop.launch_desktop(MagicMock(), auto_started=True)
 
     open_admin.assert_not_called()
@@ -285,9 +291,13 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice(
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
         controller.run.side_effect = lambda: shell.call_args.args[3]()
-        supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
-            "existing_server"
-        ](settings)
+
+        def attach_to_existing(
+            *, existing_server: Callable[[Settings], bool], **options: object
+        ) -> bool:
+            return existing_server(settings)
+
+        supervisor.return_value.run.side_effect = attach_to_existing
         desktop.launch_desktop(MagicMock())
 
     open_admin.assert_called_once_with(

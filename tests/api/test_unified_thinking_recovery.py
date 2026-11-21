@@ -5,10 +5,13 @@ from copy import deepcopy
 from typing import Any
 
 import pytest
+from starlette.types import Message
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -22,6 +25,7 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _chat_reasoning_events, _harness
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def history():
@@ -42,18 +46,18 @@ def interrupted():
     return followed_by_text(reasoning_events(field="content", closed=False), "Hello ")
 
 
-def assert_modes(bodies):
+def assert_modes(bodies: list[JsonObject]):
     assert [
         ("Old thought" in str(body), "Find 17." in str(body)) for body in bodies
     ] == [(True, True), (False, True), (False, False)]
     for body in bodies:
         rows = body.get("input", body.get("messages"))
-        assert "Find 17." not in str(rows[-1])
+        assert "Find 17." not in str(array_payload(rows)[-1])
 
 
 @pytest.mark.asyncio
 async def test_continuation_negotiates_all_modes_then_next_request_uses_cache():
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, interrupted()
         if len(bodies) in {2, 3}:
@@ -77,16 +81,16 @@ async def test_continuation_negotiates_all_modes_then_next_request_uses_cache():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 async def test_fallback_restarts_modes_from_original_history_and_delivered_prefix(
-    target,
+    target: str,
 ):
-    def first_reply(bodies):
+    def first_reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, interrupted()
         if len(bodies) in {2, 3}:
             return 400, {"message": "Rejected"}
         return 200, text_events("responses", "world ", complete=False)
 
-    def second_reply(bodies):
+    def second_reply(bodies: list[JsonObject]):
         if len(bodies) < 3:
             return 400, {"message": "Rejected"}
         return 200, text_events(target, "again.")
@@ -112,7 +116,9 @@ async def test_fallback_restarts_modes_from_original_history_and_delivered_prefi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("field", ["content", "summary"])
-async def test_repeated_thinking_alone_does_not_complete_a_continuation(wire, field):
+async def test_repeated_thinking_alone_does_not_complete_a_continuation(
+    wire: WireProtocol, field: str
+):
     async with _harness(
         "responses",
         lambda bodies: (200, reasoning_events(field=field, closed=len(bodies) > 1)),
@@ -127,7 +133,7 @@ async def test_repeated_thinking_alone_does_not_complete_a_continuation(wire, fi
     assert "without adding output" in output
 
 
-def completed_thinking_and_text(field, suffix=""):
+def completed_thinking_and_text(field: str, suffix: str = ""):
     reasoning = reasoning_events(field=field)
     for event in reasoning:
         if isinstance(event.get("delta"), str):
@@ -144,14 +150,18 @@ def completed_thinking_and_text(field, suffix=""):
     for event in text:
         if "output_index" in event:
             event["output_index"] = 1
-    text[-1]["response"]["output"].insert(0, reasoning[-1]["response"]["output"][0])
+    array_payload(object_payload(text[-1]["response"])["output"]).insert(
+        0, array_payload(object_payload(reasoning[-1]["response"])["output"])[0]
+    )
     return [*reasoning[:-1], *text[1:]]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("field", ["content", "summary"])
-async def test_matched_thinking_releases_answer_before_upstream_completes(wire, field):
+async def test_matched_thinking_releases_answer_before_upstream_completes(
+    wire: WireProtocol, field: str
+):
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
     second = completed_thinking_and_text(field)
     gated = GatedBody(
@@ -160,7 +170,7 @@ async def test_matched_thinking_releases_answer_before_upstream_completes(wire, 
     visible = asyncio.Event()
     sent = []
 
-    async def capture(message):
+    async def capture(message: Message):
         data = message.get("body", b"")
         sent.append(data)
         if b"world." in data:
@@ -201,7 +211,9 @@ async def test_matched_thinking_releases_answer_before_upstream_completes(wire, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("field", ["content", "summary"])
-async def test_second_cutoff_retains_answer_after_matched_thinking(wire, field):
+async def test_second_cutoff_retains_answer_after_matched_thinking(
+    wire: WireProtocol, field: str
+):
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
     async with _harness(
         "responses",
@@ -221,9 +233,9 @@ async def test_second_cutoff_retains_answer_after_matched_thinking(wire, field):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("second_cutoff", [False, True])
 async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
-    second_cutoff,
+    second_cutoff: bool,
 ):
-    def upstream(*, continued, complete):
+    def upstream(*, continued: bool, complete: bool):
         template = reasoning_events()
         item: dict[str, Any] = {
             "type": "reasoning",
@@ -273,7 +285,9 @@ async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
         for event in tail:
             if "output_index" in event:
                 event["output_index"] = 1
-        tail[-1]["response"]["output"].insert(0, deepcopy(item))
+        array_payload(object_payload(tail[-1]["response"])["output"]).insert(
+            0, deepcopy(item)
+        )
         events.extend(tail[1:] if complete else tail[1:-1])
         return [
             {**event, "sequence_number": sequence}
@@ -329,11 +343,11 @@ async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
 @pytest.mark.parametrize("field", ["content", "summary"])
 @pytest.mark.parametrize("suffix", ["", " Act"])
 async def test_followup_does_not_restore_thinking_removed_by_overlap(
-    wire, field, suffix
+    wire: WireProtocol, field: str, suffix: str
 ):
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         return 200, (
             first
             if len(bodies) == 1
@@ -367,7 +381,7 @@ async def test_followup_does_not_restore_thinking_removed_by_overlap(
         await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
     replayed = "".join(
         text
-        for item in bodies[-1]["input"]
+        for item in object_array(bodies[-1]["input"])
         if item.get("type") == "reasoning"
         for text, _ in readable_reasoning(item)
     )
@@ -376,8 +390,10 @@ async def test_followup_does_not_restore_thinking_removed_by_overlap(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(wire):
-    def reply(bodies):
+async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
+    wire: WireProtocol,
+):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) > 2:
             return 200, text_events("chat", "Next")
         text = "Plan" if len(bodies) == 1 else "PlanAct"
@@ -418,7 +434,7 @@ async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
         await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
     replayed = [
         part
-        for message in bodies[-1]["messages"]
+        for message in object_array(bodies[-1]["messages"])
         for part in readable_reasoning(message)
     ]
     assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanAct"
@@ -467,7 +483,9 @@ async def test_completed_alias_can_resume_as_typed_summary_without_repeating_it(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_ranges(wire):
+async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_ranges(
+    wire: WireProtocol,
+):
     scalar = {"reasoning_content": "Plan"}
     typed = {
         "reasoning_details": [
@@ -475,7 +493,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         ]
     }
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, _chat_reasoning_events([scalar, typed])[:-1]
         if len(bodies) > 2:
@@ -550,7 +568,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         )
     replayed = [
         part
-        for message in bodies[-1]["messages"]
+        for message in object_array(bodies[-1]["messages"])
         for part in readable_reasoning(message)
     ]
     assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanPlan"
@@ -560,7 +578,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("fallback", [False, True])
 async def test_signed_sibling_is_rejected_before_late_alias_metadata_is_published(
-    wire, fallback
+    wire: WireProtocol, fallback: bool
 ):
     first = _chat_reasoning_events([{"reasoning_content": "Plan"}])[:-1]
     second = _chat_reasoning_events(

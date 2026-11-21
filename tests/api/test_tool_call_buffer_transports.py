@@ -3,14 +3,16 @@
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array, object_payload
 
 
-def _tools(wire):
+def _tools(wire: str) -> list[JsonObject]:
     return (
         [{"type": "function", "name": "read", "parameters": {"type": "object"}}]
         if wire == "responses"
@@ -22,7 +24,9 @@ def _tools(wire):
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("arguments", ['{"path":"x"}', '{"path":', "null"])
-async def test_real_transport_arguments_reach_http_unchanged(protocol, wire, arguments):
+async def test_real_transport_arguments_reach_http_unchanged(
+    protocol: str, wire: str, arguments: str
+):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -53,16 +57,22 @@ async def test_real_transport_arguments_reach_http_unchanged(protocol, wire, arg
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire):
+async def test_real_transport_cutoff_cannot_complete_partial_tool(
+    protocol: str, wire: str
+):
     events = tool_events(protocol, "x")
     arguments = '{"path":"' + "x" * 70_000
     if protocol == "chat":
-        events[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] = (
-            arguments
-        )
+        object_payload(
+            object_array(
+                object_payload(object_array(events[1]["choices"])[0]["delta"])[
+                    "tool_calls"
+                ]
+            )[0]["function"]
+        )["arguments"] = arguments
         events = events[:-1]
     elif protocol == "messages":
-        events[2]["delta"]["partial_json"] = arguments
+        object_payload(events[2]["delta"])["partial_json"] = arguments
         events = events[:3]
     else:
         events[2]["delta"] = arguments
@@ -148,8 +158,8 @@ async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire):
-    events = [
+async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire: str):
+    events: list[JsonObject] = [
         tool_events("messages", "x")[0],
         {
             "type": "content_block_start",

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
@@ -837,7 +838,7 @@ def test_dsh_cli_web_startup_e2e(
             auth_token=auth_token,
             credential_env_keys=credential_env_keys,
         )
-        patches = []
+        patches: list[str] = []
         if workflow == "compact":
             patch = tmp_path / "compact.patch.yml"
             patch.write_text(
@@ -1661,6 +1662,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
                 },
             )
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1676,7 +1678,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()
@@ -1730,6 +1732,7 @@ def _successful_openai_provider(
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1770,7 +1773,7 @@ def _successful_openai_provider(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()

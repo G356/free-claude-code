@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,7 +7,11 @@ import pytest
 from free_claude_code.messaging.platforms.outbox import PlatformOutbox
 
 
-def _noop_outbox(*, limiter=None, delete_many=None) -> PlatformOutbox:
+def _noop_outbox(
+    *,
+    limiter: MagicMock | None = None,
+    delete_many: Callable[[str, list[str]], Awaitable[None]] | None = None,
+) -> PlatformOutbox:
     async def send(
         chat_id: str,
         text: str,
@@ -39,7 +44,9 @@ def _noop_outbox(*, limiter=None, delete_many=None) -> PlatformOutbox:
 async def test_queue_send_awaits_required_limiter() -> None:
     limiter = MagicMock()
 
-    async def enqueue(operation, dedup_key=None):
+    async def enqueue(
+        operation: Callable[[], Awaitable[object]], dedup_key: object = None
+    ):
         return await operation()
 
     limiter.enqueue = AsyncMock(side_effect=enqueue)
@@ -181,6 +188,6 @@ async def test_close_rejects_all_later_work() -> None:
         outbox.fire_and_forget(late_task())
     await asyncio.sleep(0)
 
-    assert ran is False
+    assert not ran
     assert outbox._background_tasks == set()
     limiter.fire_and_forget.assert_not_called()

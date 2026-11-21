@@ -25,7 +25,9 @@ class ReasoningEncoder(Protocol):
 class NoReasoning:
     """Leave reasoning computation entirely to the upstream provider."""
 
-    off_field = None
+    @property
+    def off_field(self) -> None:
+        return None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         return
@@ -59,7 +61,9 @@ class NamedEffortReasoning:
             target[self.budget_field] = policy.budget_tokens
             return
 
-        effort = dict(self.efforts).get(policy.effort)
+        effort = (
+            dict(self.efforts).get(policy.effort) if policy.effort is not None else None
+        )
         if effort is not None:
             target[self.field] = effort
             return
@@ -85,7 +89,9 @@ class ReasoningObject:
         reasoning: dict[str, Any] = {}
         if policy.budget_tokens is not None and self.supports_budget:
             reasoning["max_tokens"] = policy.budget_tokens
-        elif effort := dict(self.efforts).get(policy.effort):
+        elif policy.effort is not None and (
+            effort := dict(self.efforts).get(policy.effort)
+        ):
             reasoning["effort"] = effort
         elif policy.control is ReasoningControl.ON:
             reasoning["enabled"] = True
@@ -144,7 +150,9 @@ class LlamaCppReasoning:
 class SplitReasoningOutput:
     """Request separate reasoning output where compute is not controllable."""
 
-    off_field = None
+    @property
+    def off_field(self) -> None:
+        return None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         _extra_body(body)["reasoning_split"] = True

@@ -10,11 +10,13 @@ from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverte
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.history_replay import (
     HistoryMode,
+    HistoryProtocol,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
@@ -24,16 +26,17 @@ from free_claude_code.providers.history_replay import (
     history_retry_body,
     normalize_messages_history,
 )
+from tests.wire_payload import object_array
 
 
-def origin(protocol="chat"):
+def origin(protocol: HistoryProtocol = "chat"):
     return ReplayOrigin("provider", protocol, "https://test.invalid", "key", "model")
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("separate", [False, True])
 def test_messages_normalization_keeps_distinct_thoughts_but_not_aliases(
-    wrapped, separate
+    wrapped: bool, separate: bool
 ):
     thought = "Stored thought"
     block = {"type": "thinking", "thinking": thought}
@@ -71,7 +74,9 @@ def test_messages_normalization_keeps_distinct_thoughts_but_not_aliases(
 
 @pytest.mark.parametrize("negotiate", [False, True])
 @pytest.mark.parametrize("override", [False, True])
-def test_singleton_responses_id_correction_uses_owned_array_source(negotiate, override):
+def test_singleton_responses_id_correction_uses_owned_array_source(
+    negotiate: bool, override: bool
+):
     item = {
         "type": "reasoning",
         "id": "rs_bad:id",
@@ -111,7 +116,7 @@ def test_singleton_responses_id_correction_uses_owned_array_source(negotiate, ov
 
 
 def test_unsigned_rejection_never_converts_thinking_into_prose():
-    body = {
+    body: JsonObject = {
         "input": [
             {
                 "type": "reasoning",
@@ -149,7 +154,7 @@ def test_equal_full_and_summary_text_remain_distinct_representations():
 
 
 @pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
-def test_aggregate_scalar_alias_keeps_each_native_part_once(separator):
+def test_aggregate_scalar_alias_keeps_each_native_part_once(separator: str):
     request = MessagesRequest.model_validate(
         {
             "model": "model",
@@ -177,7 +182,9 @@ def test_aggregate_scalar_alias_keeps_each_native_part_once(separator):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scalar", ["reasoning_content", "reasoning"])
 @pytest.mark.parametrize("carrier", [False, True])
-async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar, carrier):
+async def test_sdk_history_override_keeps_scalar_detail_alias_once(
+    scalar: str, carrier: bool
+):
     from free_claude_code.core.reasoning import ReasoningPolicy
     from free_claude_code.providers.deepseek import DeepSeekProvider
     from tests.api.test_delivered_stream_recovery import text_events
@@ -230,7 +237,7 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar, carri
             ),
             "messages",
         )
-    assert bodies[0]["messages"][-1]["reasoning_content"] == "Plan"
+    assert object_array(bodies[0]["messages"])[-1]["reasoning_content"] == "Plan"
     assert request.model_dump() == before
 
 
@@ -247,7 +254,7 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar, carri
     ],
 )
 def test_sdk_carrier_aliases_preserve_records_across_history_modes(
-    mode, scalar, thoughts, expected
+    mode: HistoryMode, scalar: str, thoughts: list[str], expected: str
 ):
     assistant = {
         "role": "assistant",

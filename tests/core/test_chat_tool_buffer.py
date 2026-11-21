@@ -1,5 +1,7 @@
 """Chat has choice-level completion; JSON appearance and indexes are not ends."""
 
+from collections.abc import Mapping, Sequence
+
 import pytest
 
 from free_claude_code.core.chat_completions.tool_calls import (
@@ -8,11 +10,19 @@ from free_claude_code.core.chat_completions.tool_calls import (
     CompletedChatCall,
 )
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.tool_call_buffer import RetentionBudget, ToolBufferLimitError
+from tests.wire_payload import object_array, object_payload
 
 
-def event(calls=(), *, content=None, finish=None, choice=0):
-    delta = {"tool_calls": list(calls)} if calls else {}
+def event(
+    calls: Sequence[Mapping[str, JsonValue]] = (),
+    *,
+    content: str | None = None,
+    finish: str | None = None,
+    choice: int = 0,
+) -> JsonObject:
+    delta: JsonObject = {"tool_calls": list(calls)} if calls else {}
     if content is not None:
         delta["content"] = content
     return {
@@ -21,7 +31,12 @@ def event(calls=(), *, content=None, finish=None, choice=0):
     }
 
 
-def call(index, name=None, arguments="", tool_id=None):
+def call(
+    index: int,
+    name: str | None = None,
+    arguments: str = "",
+    tool_id: int | str | None = None,
+):
     return {
         "index": index,
         "id": tool_id,
@@ -46,7 +61,7 @@ def test_interleaved_calls_and_text_wait_for_choice_completion():
 
 
 @pytest.mark.parametrize("finish", ["length", "content_filter"])
-def test_unsuccessful_choice_does_not_publish_calls_even_with_valid_json(finish):
+def test_unsuccessful_choice_does_not_publish_calls_even_with_valid_json(finish: str):
     buffer = ChatToolCallBuffer()
     assert buffer.feed(event([call(0, "read", "{}", "a")])) == []
     result = buffer.feed(event(finish=finish))
@@ -84,10 +99,14 @@ def test_native_mixed_envelope_and_fragment_metadata_remain_associated():
         [call(4, "Re", '{"x":', "a"), call(2, "other", "{}", "b")], content="before"
     )
     first["extension"] = {"request": 1}
-    first["choices"][0]["logprobs"] = {"content": [{"token": "before"}]}
-    first["choices"][0]["delta"]["tool_calls"][0]["extension"] = "first"
+    object_array(first["choices"])[0]["logprobs"] = {"content": [{"token": "before"}]}
+    object_array(
+        object_payload(object_array(first["choices"])[0]["delta"])["tool_calls"]
+    )[0]["extension"] = "first"
     second = event([call(4, "ad", "1}")])
-    second["choices"][0]["delta"]["tool_calls"][0]["extension"] = "second"
+    object_array(
+        object_payload(object_array(second["choices"])[0]["delta"])["tool_calls"]
+    )[0]["extension"] = "second"
     assert buffer.feed(first) == []
     assert buffer.feed(second) == []
     result = buffer.feed(event(finish="tool_calls"))
@@ -95,7 +114,10 @@ def test_native_mixed_envelope_and_fragment_metadata_remain_associated():
     frames = result[0].frames
     assert frames[0]["extension"] == {"request": 1}
     assert "extension" not in frames[1]
-    assert frames[0]["choices"][0]["logprobs"] == first["choices"][0]["logprobs"]
+    assert (
+        frames[0]["choices"][0]["logprobs"]
+        == object_array(first["choices"])[0]["logprobs"]
+    )
     start = frames[0]["choices"][0]["delta"]["tool_calls"][0]
     tail = frames[1]["choices"][0]["delta"]["tool_calls"][0]
     assert start["function"]["name"] == "Read"
@@ -105,7 +127,7 @@ def test_native_mixed_envelope_and_fragment_metadata_remain_associated():
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_choice_completion_identities_remain_bounded_after_output_drains(native):
+def test_choice_completion_identities_remain_bounded_after_output_drains(native: bool):
     buffer = ChatToolCallBuffer(native=native, budget=RetentionBudget(max_records=4))
     with pytest.raises(ToolBufferLimitError):
         for choice in range(10):
@@ -123,11 +145,14 @@ def test_native_standard_mixed_chunk_streams_text_before_its_pending_call():
     buffer = ChatToolCallBuffer(native=True)
     first = event([call(0, "read", "{}", "a")], content="before")
     first["usage"] = {"prompt_tokens": 3}
-    first["choices"][0]["logprobs"] = {"content": [{"token": "before"}]}
+    object_array(first["choices"])[0]["logprobs"] = {"content": [{"token": "before"}]}
     early = buffer.feed(first)
     assert len(early) == 1 and isinstance(early[0], dict)
     assert early[0]["choices"][0]["delta"] == {"content": "before"}
-    assert early[0]["choices"][0]["logprobs"] == first["choices"][0]["logprobs"]
+    assert (
+        early[0]["choices"][0]["logprobs"]
+        == object_array(first["choices"])[0]["logprobs"]
+    )
     assert early[0]["usage"] == first["usage"]
     completed = buffer.feed(event(finish="tool_calls"))
     assert len(completed) == 1 and isinstance(completed[0], CompletedChatBatch)
@@ -147,7 +172,7 @@ def test_native_standard_mixed_chunk_streams_text_before_its_pending_call():
 @pytest.mark.parametrize("late_id", [False, True])
 @pytest.mark.parametrize("placeholder", [None, "", " \t", 7])
 def test_parallel_calls_keep_resolved_ids_across_unusable_fragments(
-    native, late_id, placeholder
+    native: bool, late_id: bool, placeholder: int | str | None
 ):
     buffer = ChatToolCallBuffer(native=native)
     assert (

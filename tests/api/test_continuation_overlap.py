@@ -6,7 +6,9 @@ from itertools import pairwise
 
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.application.response_collection import WireProtocol
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
@@ -14,9 +16,12 @@ from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
 from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
+from tests.wire_payload import object_payload
 
 
-def responses_parts(parts, *, separate_items=False, representation="deltas"):
+def responses_parts(
+    parts: list[str], *, separate_items: bool = False, representation: str = "deltas"
+):
     """Describe one answer with consistent source snapshots at every level."""
     template = text_events("responses", "")
     items = []
@@ -94,7 +99,7 @@ def responses_parts(parts, *, separate_items=False, representation="deltas"):
             {"type": "response.output_item.done", "output_index": index, "item": item}
         )
     terminal = deepcopy(template[-1])
-    terminal["response"]["output"] = items
+    object_payload(terminal["response"])["output"] = items
     events.append(terminal)
     if representation == "terminal":
         events = [events[0], terminal]
@@ -104,7 +109,7 @@ def responses_parts(parts, *, separate_items=False, representation="deltas"):
     ]
 
 
-def response_text(event):
+def response_text(event: SSEEvent):
     return "".join(
         part.get("text", "")
         for item in event.data["response"]["output"]
@@ -112,7 +117,7 @@ def response_text(event):
     )
 
 
-def assert_completion_text_agrees(events):
+def assert_completion_text_agrees(events: list[SSEEvent]):
     final = {
         item["id"]: item
         for item in events[-1].data["response"]["output"]
@@ -148,9 +153,9 @@ def assert_completion_text_agrees(events):
     ],
 )
 async def test_split_replay_has_one_answer_across_representations(
-    separate_items, representation
+    separate_items: bool, representation: str
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         return 200, responses_parts(
@@ -178,8 +183,8 @@ async def test_split_replay_has_one_answer_across_representations(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("representation", ["terminal", "text_done", "mixed"])
-async def test_split_pure_replay_is_not_public_progress(representation):
-    def reply(bodies):
+async def test_split_pure_replay_is_not_public_progress(representation: str):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         return 200, responses_parts(["He", "llo "], representation=representation)
@@ -197,8 +202,10 @@ async def test_split_pure_replay_is_not_public_progress(representation):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("seeded", [False, True])
-async def test_messages_replay_across_blocks_uses_the_same_rule(wire, seeded):
-    def reply(bodies):
+async def test_messages_replay_across_blocks_uses_the_same_rule(
+    wire: WireProtocol, seeded: bool
+):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("messages", "abcabc", complete=False)
         template = text_events("messages", "")
@@ -208,7 +215,7 @@ async def test_messages_replay_across_blocks_uses_the_same_rule(wire, seeded):
             for event in part:
                 event["index"] = index
             if seeded:
-                part[0]["content_block"]["text"] = text
+                object_payload(part[0]["content_block"])["text"] = text
                 part.pop(1)
             events.extend(part)
         return 200, [*events, *template[-2:]]
@@ -229,7 +236,9 @@ async def test_messages_replay_across_blocks_uses_the_same_rule(wire, seeded):
 
 
 @pytest.mark.asyncio
-async def test_overflow_preserves_public_prefix_and_closes_the_source(monkeypatch):
+async def test_overflow_preserves_public_prefix_and_closes_the_source(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 1000
     )
@@ -320,6 +329,7 @@ async def test_overlap_release_records_each_packet_only_when_returned():
                 and event.data["text"] == "world."
                 for event in frames
             ):
+                assert states[0].prefix is not None
                 assert states[0].prefix.text == "Hello world."
                 assert resumed == []
         assert resumed == ["Hello world."]
@@ -402,6 +412,7 @@ async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
     reader = asyncio.create_task(consume())
     try:
         await asyncio.wait_for(waiting.wait(), 1)
+        assert states[0].prefix is not None
         assert states[0].prefix.text == "Hello "
         reader.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -424,9 +435,9 @@ async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("representation", ["text_done", "part_done", "item_done"])
 async def test_snapshot_text_is_published_once_before_another_interruption(
-    representation,
+    representation: str,
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         if len(bodies) == 2:

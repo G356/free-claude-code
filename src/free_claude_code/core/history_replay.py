@@ -93,7 +93,7 @@ def _json_copy(value: object) -> JsonObject:
                 json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
             ),
         )
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise HistoryReplayError(
             "History replay requires finite, representable JSON."
         ) from exc
@@ -325,7 +325,7 @@ def decode_replay(value: str) -> ReplayRecord:
                 ).decode("utf-8")
             )
         )
-    except (ValueError, UnicodeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise HistoryReplayError("Malformed history replay.") from exc
     if prefix == _LEGACY_PREFIX:
         if (
@@ -398,10 +398,11 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
 
 def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
     """Keep distinct readable representations and their summary/full-text meaning."""
-    if isinstance(native_parts := item.get("parts"), list):
+    gemini_parts = item.get("parts")
+    if isinstance(gemini_parts, list):
         return [
-            (str(part["text"]), True)
-            for part in native_parts
+            (part["text"], True)
+            for part in gemini_parts
             if isinstance(part, dict)
             and part.get("thought") is True
             and isinstance(part.get("text"), str)
@@ -411,11 +412,11 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
         return [(text, False)] if text else []
     fields: list[tuple[str, bool]] = []
     for key in ("content", "summary"):
-        parts = item.get(key)
-        if isinstance(parts, list):
+        content_parts = item.get(key)
+        if isinstance(content_parts, list):
             text = "\n\n".join(
-                str(part["text"])
-                for part in parts
+                part["text"]
+                for part in content_parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
             if text:
@@ -1202,7 +1203,10 @@ def _restore_gemini_parts(
     )
     for echoed, native_part in zip(visible_echo, visible_native, strict=False):
         expected_call = native_part.get("functionCall")
-        call = next(native_calls, {}) if isinstance(expected_call, dict) else None
+        empty_call: dict[str, Any] = {}
+        call = (
+            next(native_calls, empty_call) if isinstance(expected_call, dict) else None
+        )
         echo_call = echoed.get("functionCall")
         if isinstance(call, dict) and isinstance(echo_call, dict):
             original_args = call.get("args") or {}
@@ -1210,7 +1214,9 @@ def _restore_gemini_parts(
             # Harnesses can materialize declared defaults before echoing a call.
             # Ignore only added default-valued fields during comparison. The
             # signed native arguments are restored exactly, never rewritten.
-            for key, value in tool_defaults.get(call.get("name"), {}).items():
+            name = call.get("name")
+            defaults = tool_defaults.get(name, {}) if isinstance(name, str) else {}
+            for key, value in defaults.items():
                 if (
                     key not in original_args
                     and key in echo_args
@@ -1256,14 +1262,15 @@ def _prepare_gemini_history(
             for index, content in enumerate(contents[:-1] if continuation else contents)
             if isinstance(content, dict)
             and content.get("role", "user") == "user"
+            and isinstance(parts := content.get("parts"), list)
             and any(
                 isinstance(part, dict) and "functionResponse" not in part
-                for part in content.get("parts", [])
+                for part in parts
             )
         ),
         default=-1,
     )
-    projected = []
+    projected: list[dict[str, Any]] = []
     call_aliases: set[str] = set()
     for index, content, part_sources in _gemini_replay_turns(
         contents, continuation=continuation
@@ -1298,7 +1305,7 @@ def _prepare_gemini_history(
             target = ("contents", len(projected))
             paths[target] = source
         include = scope.includes(index, last_user)
-        kept = []
+        kept: list[dict[str, Any]] = []
         for part_index, part in enumerate(parts):
             if (
                 not continuation_context

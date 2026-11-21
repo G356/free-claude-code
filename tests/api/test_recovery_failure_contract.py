@@ -6,8 +6,10 @@ from itertools import pairwise
 import pytest
 
 from free_claude_code.api.request_outcomes import _observe_event
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.application.response_collection import WireProtocol
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.request_outcomes import (
     RequestOutcome,
     current_request_outcome,
@@ -23,9 +25,10 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _harness
+from tests.wire_payload import object_payload
 
 
-def assert_unavailable_snapshot(events):
+def assert_unavailable_snapshot(events: list[SSEEvent]):
     assert events[-1].event == "response.failed"
     assert events[-1].data["type"] == "response.failed"
     assert sum(event.event == "response.failed" for event in events) == 1
@@ -45,13 +48,13 @@ def assert_unavailable_snapshot(events):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
-    monkeypatch, protocol, wire, continuing
+    monkeypatch: pytest.MonkeyPatch, protocol: str, wire: WireProtocol, continuing: bool
 ):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         text = "First " if continuing and len(bodies) == 1 else "x" * 2000
         return 200, text_events(protocol, text, complete=False)
 
@@ -71,7 +74,7 @@ async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
 @pytest.mark.parametrize("limited", [False, True])
 @pytest.mark.parametrize("code", [None, "context_length_exceeded"])
 async def test_failed_frame_keeps_error_category_and_finishes_execution(
-    monkeypatch, limited, code
+    monkeypatch: pytest.MonkeyPatch, limited: bool, code: str | None
 ):
     if limited:
         monkeypatch.setattr(
@@ -80,8 +83,13 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
     executions = []
     original = ProviderAdmissionController.start_execution
 
-    def capture(self, **kwargs):
-        execution = original(self, **kwargs)
+    def capture(
+        self: ProviderAdmissionController,
+        *,
+        request_id: str | None = None,
+        model: str | None = None,
+    ):
+        execution = original(self, request_id=request_id, model=model)
         executions.append(execution)
         return execution
 
@@ -93,12 +101,12 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
         "message": "Provider rejected the request.",
     }
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "First ", complete=False)
         events = text_events("responses", "x" * 2000)
         events[-1]["type"] = "response.failed"
-        events[-1]["response"].update(status="failed", error=error)
+        object_payload(events[-1]["response"]).update(status="failed", error=error)
         return 200, events
 
     async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
@@ -136,11 +144,13 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("candidate", ["", "New text."])
-async def test_production_cap_during_closures_does_not_count_as_new_output(candidate):
+async def test_production_cap_during_closures_does_not_count_as_new_output(
+    candidate: str,
+):
     # The production holdback releases this prefix by size before the disconnect.
     prefix = "A" * 400_000
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         return 200, text_events(
             "responses",
             prefix if len(bodies) == 1 else candidate,
@@ -161,7 +171,9 @@ async def test_production_cap_during_closures_does_not_count_as_new_output(candi
 
 
 @pytest.mark.asyncio
-async def test_cap_during_closures_does_not_turn_pure_echo_into_success(monkeypatch):
+async def test_cap_during_closures_does_not_turn_pure_echo_into_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -183,13 +195,15 @@ async def test_cap_during_closures_does_not_turn_pure_echo_into_success(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(monkeypatch):
+async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
     original = ContinuationStream.prepare
 
-    def prepare(self, payload):
+    def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
             raise ValueError("public processing failed")
         return original(self, payload)
@@ -231,17 +245,19 @@ ANNOTATION = {
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
-    part_event, wire, continuing
+    part_event: str, wire: WireProtocol, continuing: bool
 ):
     annotated_attempt = 2 if continuing else 1
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if continuing and len(bodies) == 1:
             return 200, text_events("responses", "First ", complete=False)
         if len(bodies) != annotated_attempt:
             return 200, text_events("responses", "Tail.")
         events = deepcopy(text_events("responses", "Cited "))[:6]
-        events[2 if part_event == "added" else 5]["part"]["annotations"] = [ANNOTATION]
+        object_payload(events[2 if part_event == "added" else 5]["part"])[
+            "annotations"
+        ] = [ANNOTATION]
         return 200, events
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -258,11 +274,11 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("annotated", [False, True])
-async def test_healthy_original_response_preserves_annotations(annotated):
+async def test_healthy_original_response_preserves_annotations(annotated: bool):
     source = text_events("responses", "Cited ")
     if annotated:
-        source[2]["part"]["annotations"] = [ANNOTATION]
-        source[5]["part"]["annotations"] = [ANNOTATION]
+        object_payload(source[2]["part"])["annotations"] = [ANNOTATION]
+        object_payload(source[5]["part"])["annotations"] = [ANNOTATION]
     async with _harness("responses", lambda _: (200, source)) as (send, bodies, _):
         raw = await delivered(
             send("responses", [{"role": "user", "content": "cite"}]), "responses"

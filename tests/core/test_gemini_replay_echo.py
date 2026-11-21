@@ -6,6 +6,7 @@ from hashlib import sha256
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.gemini.replay import (
     CallReplay,
@@ -27,6 +28,7 @@ from free_claude_code.core.history_replay import (
     prepare_history,
     readable_reasoning,
 )
+from free_claude_code.core.json_types import JsonObject
 from tests.core.test_gemini_requests import build, request
 
 ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "model")
@@ -62,9 +64,10 @@ def generated():
         "multiple_bundles",
     ],
 )
-def test_only_exact_single_bundle_echo_is_suppressed(protocol, echo):
+def test_only_exact_single_bundle_echo_is_suppressed(protocol: WireProtocol, echo: str):
     parts = generated()
     signature = parts[-1]["thoughtSignature"]
+    assert isinstance(signature, str)
     bundle = decode_bundle(signature)
     assert bundle is not None
     assert bundle.thought_echo_sha256
@@ -127,7 +130,7 @@ def test_only_exact_single_bundle_echo_is_suppressed(protocol, echo):
         {"reasoning": "a", "reasoning_content": "b", "reasoning_details": []},
     ],
 )
-def test_plain_native_chat_replay_round_trips(native):
+def test_plain_native_chat_replay_round_trips(native: JsonObject):
     record = ReplayRecord(ORIGIN, native)
     assert decode_replay(encode_replay(record)) == record
 
@@ -142,13 +145,13 @@ def test_plain_native_chat_replay_round_trips(native):
         {"reasoning_details": "bad", "reasoning_content": "good"},
     ],
 )
-def test_native_chat_replay_rejects_invalid_recognized_fields(native):
+def test_native_chat_replay_rejects_invalid_recognized_fields(native: JsonObject):
     with pytest.raises(HistoryReplayError):
         encode_replay(ReplayRecord(ORIGIN, native))
 
 
 @pytest.mark.parametrize("digest", [None, "bad", 17, "g" * 64])
-def test_bundle_rejects_invalid_echo_digest(digest):
+def test_bundle_rejects_invalid_echo_digest(digest: int | str | None):
     import base64
 
     from free_claude_code.core.gemini import GeminiConversionError
@@ -179,7 +182,7 @@ def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_echo_digest_requires_replay_coverage_of_all_thought_text(native):
+def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
     output = GeminiOutput("response", "model", include_thoughts=True)
     output.capture_call(
         CallReplay(ORIGIN, "call", {"google": {"thought_signature": "opaque"}})
@@ -221,15 +224,18 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native):
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("placement", ["text", "standalone", "call"])
-def test_foreign_native_gemini_signature_fails_explicitly(protocol, placement):
+def test_foreign_native_gemini_signature_fails_explicitly(
+    protocol: str, placement: str
+):
     from free_claude_code.core.gemini import GeminiConversionError
 
-    part = {"thoughtSignature": "AP8="}
+    part: JsonObject = {"thoughtSignature": "AP8="}
     if placement == "text":
         part["text"] = "signed text"
     elif placement == "call":
-        part["functionCall"] = {"id": "call", "name": "read", "args": {}}
-    contents = [{"role": "model", "parts": [part]}]
+        call: JsonObject = {"id": "call", "name": "read", "args": {}}
+        part["functionCall"] = call
+    contents: list[JsonObject] = [{"role": "model", "parts": [part]}]
     if placement == "call":
         contents.append(
             {

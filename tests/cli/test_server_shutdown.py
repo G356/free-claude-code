@@ -49,9 +49,13 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
         return app
 
     monkeypatch.setattr(commands, "load_server_settings", lambda: settings)
+
+    def callback(*args: object, **kwargs: object):
+        return None
+
     monkeypatch.setattr(
         "free_claude_code.runtime.bootstrap.configure_logging",
-        lambda *args, **kwargs: None,
+        callback,
     )
     monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", create_app)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
@@ -59,6 +63,7 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     supervisor = commands.ServerSupervisor(console_logging=False)
     thread = threading.Thread(target=supervisor.run, daemon=True)
     thread.start()
+    new_status = None
     stream_error: Exception | None = None
     try:
         async with asyncio.timeout(5):
@@ -130,4 +135,5 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     ]
     assert starts[0]["instance_id"] == old_instance
     if restart:
+        assert new_status is not None
         assert starts[1]["instance_id"] == new_status["instance_id"]

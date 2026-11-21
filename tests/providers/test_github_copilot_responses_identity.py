@@ -8,7 +8,7 @@ match the raw HTTP capture; no credentials or model reasoning are retained.
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import httpx2
 import pytest
@@ -141,6 +141,7 @@ async def test_captured_copilot_tool_identity_survives_stream_and_result_continu
     harness.responses_content = responses_sse(*capture).encode()
     try:
         events = await _run(harness, _input(responses, harness.runtime.name))
+        output = None
         if responses:
             output = _assert_native_identity(events)
             assert len(output) == 1
@@ -224,6 +225,7 @@ async def test_captured_copilot_tool_identity_survives_stream_and_result_continu
         assert json.loads(calls[0]["arguments"]) == {"value": "FCC_TOOL_OK"}
         assert results[0]["output"] == "FCC_TOOL_OK"
         if responses:
+            assert output is not None
             assert calls == output
         assert all(wire.closed for wire in harness.wires)
     finally:
@@ -246,6 +248,7 @@ async def test_copilot_done_only_tool_binds_identity_without_an_added_event(
     harness.responses_content = responses_sse(*capture).encode()
     try:
         events = await _run(harness, _input(responses, harness.runtime.name))
+        output = None
         if responses:
             output = _assert_native_identity(events)
             assert output[0]["id"] == _item(capture[1])["id"]
@@ -323,7 +326,7 @@ async def test_copilot_interleaved_tools_use_output_positions_and_preserve_final
     first = deepcopy(_item(capture[2]))
     second = {**first, "id": "opaque-second-added", "call_id": "call-second"}
     reasoning = {"type": "reasoning", "id": "opaque-reasoning-added", "summary": []}
-    final_reasoning = {
+    final_reasoning: JsonObject = {
         **reasoning,
         "id": "opaque-reasoning-final",
         "summary": [{"type": "summary_text", "text": "synthetic fixture reasoning"}],
@@ -498,6 +501,7 @@ async def test_copilot_partial_failure_output_does_not_mask_authentication_refre
     _item(recovered[2])["id"] = "recovered-tool"
 
     class RefreshHarness(Harness):
+        @override
         def openai(self, request: httpx2.Request) -> httpx2.Response:
             if self.runtime.sessions[0].endpoint_calls > 1:
                 self.responses_content = responses_sse(*recovered).encode()

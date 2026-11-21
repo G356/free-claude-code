@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast
+from typing import cast, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
@@ -28,9 +28,11 @@ class FakeRuntime(ProviderRuntime):
         self.provider = MagicMock()
         self.provider.list_model_infos = AsyncMock(return_value=frozenset())
 
+    @override
     def is_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
         return provider_id == "cached"
 
+    @override
     async def resolve_provider(
         self, provider_id: str, api_key_number: int = 1
     ) -> BaseProvider:
@@ -38,6 +40,7 @@ class FakeRuntime(ProviderRuntime):
             raise ConnectionError("Local fixture is offline")
         return cast(BaseProvider, self.provider)
 
+    @override
     async def cleanup(self) -> None:
         self.cleanup_calls += 1
         if self.cleanup_started is not None:
@@ -54,7 +57,10 @@ class RuntimeFactory:
         self.error: Exception | None = None
 
     def __call__(
-        self, settings: Settings, admission_registry, history_cache=None
+        self,
+        settings: Settings,
+        admission_registry: object,
+        history_cache: object = None,
     ) -> ProviderRuntime:
         if self.error is not None:
             raise self.error
@@ -172,7 +178,7 @@ async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_i
         "api_keys": ["catalog-first", "catalog-tail"],
     }
 
-    def settings(keys):
+    def settings(keys: list[str]):
         return Settings.model_validate(
             {
                 "FCC_CUSTOM_PROVIDERS": [{**definition, "api_keys": keys}],
@@ -183,7 +189,7 @@ async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_i
     async def held_models():
         await asyncio.Event().wait()
 
-    def factory(config, registry, history_cache=None):
+    def factory(config: Settings, registry: object, history_cache: object = None):
         runtime = FakeRuntime(config)
         runtime.provider.list_model_infos = AsyncMock(side_effect=held_models)
         return runtime
@@ -660,7 +666,7 @@ async def test_failed_candidate_cleanup_is_retried_at_shutdown() -> None:
     assert factory.runtimes[1].cleanup_calls == 3
     assert manager._unpublished == set()
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -848,7 +854,7 @@ async def test_cancelled_shutdown_reuses_the_same_owned_cleanup_task() -> None:
 
     assert cleanup_calls == 1
     assert manager._retired == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -879,7 +885,7 @@ async def test_failed_shutdown_cleanup_is_retryable() -> None:
     assert factory.runtimes[0].cleanup_calls == 2
     assert manager._retired == {}
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import time
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -34,7 +34,7 @@ class FakeOpenAIUpstream:
     def base_url(self) -> str:
         if self._server is None:
             raise RuntimeError("Fake upstream is not running")
-        port = int(self._server.server_address[1])
+        port = self._server.server_address[1]
         return f"http://127.0.0.1:{port}/v1"
 
     def __enter__(self) -> FakeOpenAIUpstream:
@@ -43,6 +43,7 @@ class FakeOpenAIUpstream:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            @override
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
