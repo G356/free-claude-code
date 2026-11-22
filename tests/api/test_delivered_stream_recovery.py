@@ -1,7 +1,6 @@
 """Recovery extends one public response after content has been delivered."""
 
 import asyncio
-import json
 from copy import deepcopy
 from itertools import pairwise
 from typing import override
@@ -14,7 +13,7 @@ from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import RequestCorrector
@@ -32,7 +31,15 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, int_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 def text_events(protocol: str, text: str, *, complete: bool = True) -> list[JsonObject]:
@@ -144,15 +151,68 @@ def text_events(protocol: str, text: str, *, complete: bool = True) -> list[Json
 def public_text(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
-            event.data.get("delta", {}).get("text", "")
-            + event.data.get("content_block", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
+            + string_payload(
+                object_payload(event.data.get("content_block", {})).get("text", "")
+            )
             for event in events
         )
     return "".join(
-        event.data["delta"]
+        string_payload(event.data["delta"])
         for event in events
         if event.event == "response.output_text.delta"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("empty_delta", [[], False])
+async def test_empty_chat_stop_delta_completes_translation(
+    wire: WireProtocol, empty_delta: JsonValue
+) -> None:
+    events = text_events("chat", "hello")
+    object_array(events[-1]["choices"])[0]["delta"] = empty_delta
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        _,
+        _,
+    ):
+        stream = await delivered(send(wire, [{"role": "user", "content": "hi"}]), wire)
+
+    output = parse_sse_text(stream)
+    assert_completed(output, wire)
+    assert public_text(output, wire) == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    ("wire", "field"),
+    [("messages", "content"), ("responses", "content"), ("messages", "refusal")],
+)
+@pytest.mark.parametrize("invalid_text", [42, ["trailing"]])
+async def test_nonstring_chat_text_cannot_complete_translation(
+    wire: WireProtocol, field: str, invalid_text: JsonValue
+) -> None:
+    events = text_events("chat", "hello")
+    malformed = text_events("chat", "", complete=False)[0]
+    object_array(malformed["choices"])[0]["delta"] = {field: invalid_text}
+    events.insert(1, malformed)
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        _,
+        _,
+    ):
+        stream = await delivered(send(wire, [{"role": "user", "content": "hi"}]), wire)
+
+    output = parse_sse_text(stream)
+    assert output[-1].event == ("error" if wire == "messages" else "response.failed")
+    assert public_text(output, wire) == "hello"
 
 
 def assert_completed(events: list[SSEEvent], wire: str):
@@ -169,12 +229,12 @@ def assert_completed(events: list[SSEEvent], wire: str):
     )
     assert not any(event.event in {"error", "response.failed"} for event in events)
     if wire == "responses":
-        numbers = [event.data["sequence_number"] for event in events]
+        numbers = [int_payload(event.data["sequence_number"]) for event in events]
         assert all(right > left for left, right in pairwise(numbers))
         assert (
             len(
                 {
-                    event.data["response"]["id"]
+                    object_payload(event.data["response"])["id"]
                     for event in events
                     if "response" in event.data
                 }
@@ -188,7 +248,7 @@ def assert_completed(events: list[SSEEvent], wire: str):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_text_cutoff_continues_one_response_and_preserves_tools(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
@@ -208,12 +268,12 @@ async def test_text_cutoff_continues_one_response_and_preserves_tools(
     assert bodies[1]["tools"] == bodies[0]["tools"]
     assert "Hello " in str(bodies[1])
     if wire == "responses":
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in output
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Hello world."
         )
@@ -224,7 +284,7 @@ async def test_text_cutoff_continues_one_response_and_preserves_tools(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_released_tool_finishes_handoff_without_another_request(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(_bodies):
         events = tool_events(protocol, '{"path":"kept"}')
         return 200, events[:-1]
@@ -243,9 +303,14 @@ async def test_released_tool_finishes_handoff_without_another_request(
         return
     assert_completed(events, wire)
     if wire == "messages":
-        assert events[-2].data["delta"]["stop_reason"] == "tool_use"
+        assert object_payload(events[-2].data["delta"])["stop_reason"] == "tool_use"
     else:
-        assert events[-1].data["response"]["output"][0]["call_id"] == "call_probe"
+        assert (
+            object_array(object_payload(events[-1].data["response"])["output"])[0][
+                "call_id"
+            ]
+            == "call_probe"
+        )
 
 
 def after_text(protocol: str, tail: list[JsonObject]):
@@ -268,7 +333,7 @@ def after_text(protocol: str, tail: list[JsonObject]):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_partial_call_after_public_text_is_discarded_before_continuation(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, after_text(protocol, partial_tool(protocol))
@@ -286,18 +351,23 @@ async def test_partial_call_after_public_text_is_discarded_before_continuation(
     assert public_text(events, wire) == "Before. "
     if wire == "messages":
         arguments = "".join(
-            e.data.get("delta", {}).get("partial_json", "") for e in events
+            string_payload(
+                object_payload(e.data.get("delta", {})).get("partial_json", "")
+            )
+            for e in events
         )
         assert arguments == '{"path":"winning"}'
     else:
         assert "winning" in result
         calls = [
             item
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
         assert len(calls) == 1
-        assert calls[0]["arguments"] == '{"path":"winning"}'
+        assert object_payload(calls[0])["arguments"] == '{"path":"winning"}'
 
 
 @pytest.mark.asyncio
@@ -305,7 +375,7 @@ async def test_partial_call_after_public_text_is_discarded_before_continuation(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_repeated_interruption_uses_latest_prefix_and_one_budget(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         index = len(bodies) - 1
         return 200, text_events(
@@ -320,8 +390,8 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three."
     assert len(bodies) == 3
-    history = without_empty_reasoning(
-        bodies[-1].get("messages", bodies[-1].get("input"))
+    history = object_array(
+        without_empty_reasoning(bodies[-1].get("messages", bodies[-1].get("input")))
     )
     assert (
         history[0]
@@ -344,7 +414,7 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(
 )
 async def test_exact_overlap_filter_preserves_nonmatching_text(
     protocol: str, wire: WireProtocol, candidate: str, expected: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
@@ -360,12 +430,12 @@ async def test_exact_overlap_filter_preserves_nonmatching_text(
     assert_completed(events, wire)
     assert public_text(events, wire) == expected
     if wire == "responses":
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in output
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
             )
             == expected
         )
@@ -376,7 +446,7 @@ async def test_exact_overlap_filter_preserves_nonmatching_text(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_exact_replay_without_new_output_is_not_success(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(
         protocol,
         lambda bodies: (200, text_events(protocol, "Same.", complete=len(bodies) > 1)),
@@ -406,7 +476,7 @@ async def test_exact_replay_without_new_output_is_not_success(
 )
 async def test_partial_overlap_across_single_character_chunks(
     protocol: str, wire: WireProtocol, prefix: str, candidate: str, expected: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, prefix, complete=False)
@@ -445,22 +515,24 @@ async def test_partial_overlap_across_single_character_chunks(
     if wire == "responses":
         assert (
             "".join(
-                part.get("text", "")
-                for item in events[-1].data["response"]["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(
+                    object_payload(events[-1].data["response"])["output"]
+                )
+                for part in object_array(object_payload(item).get("content", []))
             )
             == expected
         )
 
 
 @pytest.mark.asyncio
-async def test_native_passthrough_continuation_closes_original_connection():
+async def test_native_passthrough_continuation_closes_original_connection() -> None:
     bodies = []
     first = Wire([_sse(*text_events("messages", "Hello ", complete=False))])
     second = Wire([_sse(*text_events("messages", "world."))])
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             assert first.closed
         return httpx.Response(
@@ -489,7 +561,7 @@ async def test_native_passthrough_continuation_closes_original_connection():
 @pytest.mark.parametrize("complete", [False, True])
 async def test_retention_limit_does_not_truncate_healthy_output(
     monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, complete: bool
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 100
     )
@@ -515,7 +587,7 @@ async def test_retention_limit_does_not_truncate_healthy_output(
 @pytest.mark.parametrize("continuation", [False, True])
 async def test_stopped_continuation_cannot_request_another_body_correction(
     monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, continuation: bool
-):
+) -> None:
     corrections = []
 
     def correction(*args: object, **kwargs: object):
@@ -556,7 +628,7 @@ async def test_stopped_continuation_cannot_request_another_body_correction(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_opaque_reasoning_is_not_regenerated_after_delivery(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     events = _events_for(protocol)
     if protocol == "chat":
         events = events[:1]
@@ -576,7 +648,9 @@ async def test_opaque_reasoning_is_not_regenerated_after_delivery(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_hidden_hosted_action_after_text_blocks_continuation(wire: WireProtocol):
+async def test_hidden_hosted_action_after_text_blocks_continuation(
+    wire: WireProtocol,
+) -> None:
     events = after_text("responses", partial_tool("responses"))
     events.append(
         {
@@ -603,7 +677,7 @@ async def test_hidden_hosted_action_after_text_blocks_continuation(wire: WirePro
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_continuation_closes_both_attempts():
+async def test_cancellation_during_continuation_closes_both_attempts() -> None:
     entered = asyncio.Event()
     calls = []
     first = Wire([_sse(*text_events("messages", "First ", complete=False))])
@@ -657,7 +731,7 @@ async def test_cancellation_during_continuation_closes_both_attempts():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_completed_signed_thinking_and_call_can_finish_without_regeneration(
     wire: WireProtocol,
-):
+) -> None:
     events = _events_for("messages")[:-2]
     calls = tool_events("messages", '{"path":"kept"}')[1:]
     for event in calls:
@@ -673,12 +747,12 @@ async def test_completed_signed_thinking_and_call_can_finish_without_regeneratio
     assert_completed(parse_sse_text(result), wire)
 
 
-def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
+def test_http_recovery_then_real_harness_tool_result_has_no_private_history() -> None:
     sent = []
     wires = []
 
     def reply(request: httpx.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         sent.append(body)
         if len(sent) == 3:
             return httpx.Response(
@@ -719,10 +793,10 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
             event.data["content_block"]
             for event in events
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "tool_use"
+            and object_payload(event.data["content_block"])["type"] == "tool_use"
         ]
         assert len(calls) == 1
-        call = {**calls[0], "input": {"path": "winning"}}
+        call = {**object_payload(calls[0]), "input": {"path": "winning"}}
         history = [
             *array_payload(body["messages"]),
             {
@@ -744,7 +818,10 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
             "/v1/messages", json={**body, "stream": False, "messages": history}
         )
         assert second.status_code == 200
-        assert second.json()["content"][0]["text"] == "result received"
+        assert (
+            object_array(response_object(second)["content"])[0]["text"]
+            == "result received"
+        )
     assert len(sent) == 3
     assert without_empty_reasoning(sent[2]["messages"]) == history
     assert "previous provider stream" not in str(sent[2])
@@ -757,7 +834,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
 @pytest.mark.parametrize("structured", [False, True])
 async def test_readable_thinking_retries_or_continues_into_text(
     wire: WireProtocol, structured: bool
-):
+) -> None:
     first = text_events("chat", "", complete=False)
     thought = "Look at the request first."
     object_array(first[0]["choices"])[0]["delta"] = {"reasoning_content": thought}
@@ -792,7 +869,7 @@ async def test_readable_thinking_retries_or_continues_into_text(
 @pytest.mark.parametrize("echo", [False, True])
 async def test_retention_limit_during_continuation_keeps_final_output_consistent(
     monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, echo: bool
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -821,26 +898,37 @@ async def test_retention_limit_during_continuation_keeps_final_output_consistent
         final = events[-1].data["response"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in final["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(object_payload(final)["output"])
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "First " + "x" * 2000
         )
         streamed_ids = [
-            event.data["item"]["id"]
+            object_payload(event.data["item"])["id"]
             for event in events
             if event.event == "response.output_item.done"
         ]
-        assert [item["id"] for item in final["output"]] == streamed_ids
-        assert final["usage"]["output_tokens"] > 0
+        assert [
+            object_payload(item)["id"]
+            for item in array_payload(object_payload(final)["output"])
+        ] == streamed_ids
+        assert (
+            int_payload(object_payload(object_payload(final)["usage"])["output_tokens"])
+            > 0
+        )
     else:
-        assert events[-2].data["usage"]["output_tokens"] >= 250
+        assert (
+            int_payload(object_payload(events[-2].data["usage"])["output_tokens"])
+            >= 250
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_partial_replay_without_new_output_is_not_success(wire: WireProtocol):
+async def test_partial_replay_without_new_output_is_not_success(
+    wire: WireProtocol,
+) -> None:
     async with _harness(
         "messages",
         lambda bodies: (
@@ -863,7 +951,34 @@ async def test_partial_replay_without_new_output_is_not_success(wire: WireProtoc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_seeded_text_start_participates_in_overlap_filter(wire: WireProtocol):
+@pytest.mark.parametrize("invalid_index", [0.0, "0", None])
+async def test_malformed_messages_block_index_can_retry(
+    wire: WireProtocol, invalid_index: JsonValue
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        events = text_events("messages", "recovered")
+        if len(bodies) == 1:
+            block_start = next(
+                event for event in events if event["type"] == "content_block_start"
+            )
+            block_start["index"] = invalid_index
+        return 200, events
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "continue"}]), wire
+        )
+    assert len(bodies) == 2
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "recovered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_seeded_text_start_participates_in_overlap_filter(
+    wire: WireProtocol,
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("messages", "The answer is", complete=False)

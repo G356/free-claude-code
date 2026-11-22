@@ -20,7 +20,7 @@ from tests.providers.support import assistant_history_text, without_empty_reason
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
-from tests.wire_payload import array_payload, object_array
+from tests.wire_payload import array_payload, decode_object, object_array
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ from tests.wire_payload import array_payload, object_array
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_empty_continuation_fails_without_compatibility_padding(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
@@ -52,7 +52,7 @@ async def test_empty_continuation_fails_without_compatibility_padding(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_empty_initial_generation_preserves_compatibility_padding(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(protocol, lambda _: (200, text_events(protocol, ""))) as (
         send,
         bodies,
@@ -74,7 +74,7 @@ async def test_empty_initial_generation_preserves_compatibility_padding(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_real_provider_whitespace_is_continuation_output(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(
         protocol,
         lambda bodies: (
@@ -101,7 +101,7 @@ async def test_real_provider_whitespace_is_continuation_output(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_readable_reasoning_continuation_succeeds_without_padding(
     wire: WireProtocol,
-):
+) -> None:
     reasoning = text_events("chat", "")
     object_array(reasoning[0]["choices"])[0]["delta"] = {
         "reasoning_content": "Consider the greeting."
@@ -161,7 +161,7 @@ def rejected_history_error(protocol: str, body: JsonObject):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_history_correction_survives_another_interruption(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, _events_for(protocol)
@@ -206,7 +206,7 @@ async def test_history_correction_survives_another_interruption(
 
 
 @pytest.mark.asyncio
-async def test_removed_history_row_stays_removed_after_another_interruption():
+async def test_removed_history_row_stays_removed_after_another_interruption() -> None:
     history: list[JsonObject] = [
         {
             "type": "reasoning",
@@ -249,7 +249,9 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
 
 
 @pytest.mark.asyncio
-async def test_native_messages_repeated_continuation_replaces_only_private_tail():
+async def test_native_messages_repeated_continuation_replaces_only_private_tail() -> (
+    None
+):
     bodies = []
     wires = [
         Wire([_sse(*text_events("messages", text, complete=index == 2))])
@@ -258,7 +260,7 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
 
     def reply(request: httpx.Request):
         assert all(wire.closed for wire in wires[: len(bodies)])
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -275,9 +277,13 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
         assert public_text(parse_sse_text(result), "messages") == "Hello world again."
         assert len(bodies) == 3
         assert (
-            without_empty_reasoning(bodies[-1]["messages"][:-2]) == initial["messages"]
+            without_empty_reasoning(array_payload(bodies[-1]["messages"])[:-2])
+            == initial["messages"]
         )
-        assert assistant_history_text(bodies[-1]["messages"][-2:]) == "Hello world "
+        assert (
+            assistant_history_text(array_payload(bodies[-1]["messages"])[-2:])
+            == "Hello world "
+        )
         assert all(wire.closed for wire in wires)
     finally:
         await p.cleanup()

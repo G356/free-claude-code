@@ -1,7 +1,6 @@
 """Cached Google metadata is scoped to the credential used by each attempt."""
 
 import asyncio
-import json
 from dataclasses import replace
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -27,6 +27,7 @@ from tests.providers.test_gemini_review_regressions import (
     transport,
 )
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 def history_request(wire: str, *, model: str = "model", replay: bool = False):
@@ -115,12 +116,15 @@ def history_request(wire: str, *, model: str = "model", replay: bool = False):
 async def consume(
     adapter: OpenAIChatTransport, wire: str, model: str = "model", replay: bool = False
 ):
-    return [
-        event
-        async for event in getattr(adapter, f"stream_{wire}")(
-            history_request(wire, model=model, replay=replay)
-        )
-    ]
+    request = history_request(wire, model=model, replay=replay)
+    if isinstance(request, MessagesRequest):
+        stream = adapter.stream_messages(request)
+    elif isinstance(request, GeminiRequest):
+        stream = adapter.stream_gemini(request)
+    else:
+        assert isinstance(request, OpenAIResponsesRequest)
+        stream = adapter.stream_responses(request)
+    return [event async for event in stream]
 
 
 @pytest.mark.asyncio
@@ -130,11 +134,11 @@ async def consume(
 )
 async def test_cache_restoration_uses_actual_connection_for_every_ingress(
     wire: str, change: str
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {
@@ -172,17 +176,32 @@ async def test_cache_restoration_uses_actual_connection_for_every_ingress(
             replay=True,
             model="changed" if change == "model" else "model",
         )
-    call = next(m for m in sent[1]["messages"] if m.get("tool_calls"))["tool_calls"][0]
+    call = array_payload(
+        object_payload(
+            next(
+                m
+                for m in array_payload(sent[1]["messages"])
+                if object_payload(m).get("tool_calls")
+            )
+        )["tool_calls"]
+    )[0]
     expected = (
         GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR
         if change in {"credential", "endpoint"}
         else "source-signature"
     )
-    assert call["extra_content"]["google"]["thought_signature"] == expected
+    assert (
+        object_payload(object_payload(object_payload(call)["extra_content"])["google"])[
+            "thought_signature"
+        ]
+        == expected
+    )
 
 
 @pytest.mark.asyncio
-async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenance():
+async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenance() -> (
+    None
+):
     resolutions = 0
     sent = []
 
@@ -237,7 +256,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
 
 
 @pytest.mark.asyncio
-async def test_endpoint_snapshot_precedes_renewable_callback():
+async def test_endpoint_snapshot_precedes_renewable_callback() -> None:
     class Endpoint:
         async def endpoint(self, *, force_refresh: object = False):
             return HttpEndpoint(
@@ -273,7 +292,7 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
     assert requests[0].url.host == "endpoint.invalid"
 
 
-def test_global_cache_bound_and_native_metadata_precedence():
+def test_global_cache_bound_and_native_metadata_precedence() -> None:
     behavior = GoogleChatBehavior(GOOGLE_PROFILE)
     source = ReplayOrigin(
         GOOGLE_PROFILE.provider_name, "chat", "endpoint", "account", "model"
@@ -297,7 +316,7 @@ def test_global_cache_bound_and_native_metadata_precedence():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_attempts_record_their_own_origin():
+async def test_concurrent_attempts_record_their_own_origin() -> None:
     barrier = asyncio.Event()
     arrivals = 0
 
@@ -353,7 +372,7 @@ async def test_concurrent_attempts_record_their_own_origin():
 
 
 @pytest.mark.asyncio
-async def test_buffered_recovery_metadata_uses_replacement_credentials():
+async def test_buffered_recovery_metadata_uses_replacement_credentials() -> None:
     resolutions = 0
     requests = []
 

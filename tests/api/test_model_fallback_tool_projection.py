@@ -17,7 +17,7 @@ from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_response_streams import _json_error
 from tests.core.openai_responses.test_client_tool_discovery import SEARCH
 from tests.providers.test_history_transports import _harness
-from tests.wire_payload import array_payload, object_payload
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +97,7 @@ def interrupted_search(
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_failed_client_search_projection_preserves_model_fallback(
     monkeypatch: pytest.MonkeyPatch, release: bool, status: str | None
-):
+) -> None:
     async with (
         _harness(
             "responses",
@@ -121,7 +121,7 @@ async def test_failed_client_search_projection_preserves_model_fallback(
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_final_search_failure_keeps_native_error_metadata_and_valid_output(
     monkeypatch: pytest.MonkeyPatch, status: str | None
-):
+) -> None:
     source = []
 
     def failed(bodies: list[JsonObject]):
@@ -139,17 +139,20 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
     if status == "completed":
         # Explicit completion reaches representation validation. Invalid search
         # arguments fail atomically before publishing the call.
-        assert final.data["response"]["error"]["type"] == "api_error"
+        assert (
+            object_payload(object_payload(final.data["response"])["error"])["type"]
+            == "api_error"
+        )
         assert "call_abandoned" not in raw
         return
     assert final.data["extension"] == source[-1]["extension"]
     for field in ("error", "metadata", "usage"):
         assert (
-            final.data["response"][field]
+            object_payload(final.data["response"])[field]
             == object_payload(source[-1]["response"])[field]
         )
     assert (
-        final.data["response"]["output"]
+        object_payload(final.data["response"])["output"]
         == array_payload(object_payload(source[-1]["response"])["output"])[:1]
     )
     assert "call_abandoned" not in raw
@@ -160,7 +163,7 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
 async def test_invalid_successful_search_snapshot_still_fails_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
     terminal: str,
-):
+) -> None:
     async with (
         _harness(
             "responses",
@@ -177,7 +180,7 @@ async def test_invalid_successful_search_snapshot_still_fails_without_fallback(
     assert len(first_bodies) == 1 and not second_bodies
     final = parse_sse_text(raw)[-1]
     assert final.event == "response.failed"
-    assert (
-        "Invalid client search arguments" in final.data["response"]["error"]["message"]
+    assert "Invalid client search arguments" in string_payload(
+        object_payload(object_payload(final.data["response"])["error"])["message"]
     )
     assert "call_abandoned" not in raw

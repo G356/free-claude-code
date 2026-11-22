@@ -18,6 +18,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -37,11 +38,11 @@ def cohere_provider(cohere_config: ProviderConfig):
     return profiled_provider("cohere", cohere_config, admission=immediate_admission())
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert COHERE_DEFAULT_BASE == "https://api.cohere.ai/compatibility/v1"
 
 
-def test_init_uses_default_base_url_and_api_key(cohere_config: ProviderConfig):
+def test_init_uses_default_base_url_and_api_key(cohere_config: ProviderConfig) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
@@ -54,7 +55,7 @@ def test_init_uses_default_base_url_and_api_key(cohere_config: ProviderConfig):
     mock_openai.assert_called_once()
 
 
-def test_init_strips_trailing_slash(cohere_config: ProviderConfig):
+def test_init_strips_trailing_slash(cohere_config: ProviderConfig) -> None:
     config = replace(cohere_config, base_url=f"{COHERE_DEFAULT_BASE}/")
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -65,7 +66,7 @@ def test_init_strips_trailing_slash(cohere_config: ProviderConfig):
 
 def test_build_request_body_sanitizes_documented_unsupported_fields(
     cohere_provider: OpenAIChatProvider,
-):
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -87,7 +88,7 @@ def test_build_request_body_sanitizes_documented_unsupported_fields(
 
         body = cohere_provider._chat._build_request_body(make_request())
 
-    assert body["messages"][0].get("name") is None
+    assert object_payload(array_payload(body["messages"])[0]).get("name") is None
     assert body["max_tokens"] == 42
     assert "max_completion_tokens" not in body
     for key in (
@@ -107,7 +108,7 @@ def test_build_request_body_sanitizes_documented_unsupported_fields(
 
 def test_build_request_body_maps_reasoning_on_to_high(
     cohere_provider: OpenAIChatProvider,
-):
+) -> None:
     request = make_request()
     body = cohere_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
@@ -118,7 +119,7 @@ def test_build_request_body_maps_reasoning_on_to_high(
 
 def test_build_request_body_preserves_replayed_reasoning_content(
     cohere_provider: OpenAIChatProvider,
-):
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -148,7 +149,7 @@ def test_build_request_body_preserves_replayed_reasoning_content(
     assert body["reasoning_effort"] == "high"
 
 
-def test_build_request_body_maps_reasoning_off_to_none():
+def test_build_request_body_maps_reasoning_off_to_none() -> None:
     provider = profiled_provider(
         "cohere",
         make_provider_config(
@@ -166,7 +167,7 @@ def test_build_request_body_maps_reasoning_off_to_none():
 
 def test_build_request_body_promotes_allowed_extra_body(
     cohere_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(
         extra_body={
             "frequency_penalty": 0.1,
@@ -187,7 +188,7 @@ def test_build_request_body_promotes_allowed_extra_body(
 
 def test_build_request_body_rejects_unsupported_extra_body(
     cohere_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(extra_body={"documents": [{"text": "x"}]})
 
     with pytest.raises(InvalidRequestError, match="Unsupported"):
@@ -195,7 +196,7 @@ def test_build_request_body_rejects_unsupported_extra_body(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(cohere_provider: OpenAIChatProvider):
+async def test_stream_messages_text(cohere_provider: OpenAIChatProvider) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -229,7 +230,7 @@ async def test_stream_messages_text(cohere_provider: OpenAIChatProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_tool_call(cohere_provider: OpenAIChatProvider):
+async def test_stream_messages_tool_call(cohere_provider: OpenAIChatProvider) -> None:
     mock_tc = MagicMock()
     mock_tc.index = 0
     mock_tc.id = "call_1"
@@ -269,7 +270,9 @@ async def test_stream_messages_tool_call(cohere_provider: OpenAIChatProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(cohere_provider: OpenAIChatProvider):
+async def test_stream_messages_reasoning_content(
+    cohere_provider: OpenAIChatProvider,
+) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -304,7 +307,7 @@ async def test_stream_messages_reasoning_content(cohere_provider: OpenAIChatProv
 
 
 @pytest.mark.asyncio
-async def test_cleanup(cohere_provider: OpenAIChatProvider):
+async def test_cleanup(cohere_provider: OpenAIChatProvider) -> None:
     cohere_provider._client = AsyncMock()
 
     await cohere_provider.cleanup()

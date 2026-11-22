@@ -19,6 +19,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -38,11 +39,11 @@ def wafer_provider(wafer_config: ProviderConfig):
     )
 
 
-def test_default_base_url():
+def test_default_base_url() -> None:
     assert WAFER_DEFAULT_BASE == "https://pass.wafer.ai/v1"
 
 
-def test_init_uses_openai_chat_provider(wafer_provider: OpenAIChatProvider):
+def test_init_uses_openai_chat_provider(wafer_provider: OpenAIChatProvider) -> None:
     assert isinstance(wafer_provider, OpenAIChatProvider)
     assert wafer_provider._api_key == "test-wafer-key"
     assert wafer_provider._base_url == WAFER_DEFAULT_BASE
@@ -51,7 +52,7 @@ def test_init_uses_openai_chat_provider(wafer_provider: OpenAIChatProvider):
 
 def test_build_request_body_openai_shape_and_defaults(
     wafer_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "DeepSeek-V4-Pro",
@@ -72,15 +73,20 @@ def test_build_request_body_openai_shape_and_defaults(
     )
 
     assert body["model"] == "DeepSeek-V4-Pro"
-    assert body["messages"][0] == {"role": "user", "content": "Hello"}
-    assert body["tools"][0]["function"]["name"] == "echo"
+    assert array_payload(body["messages"])[0] == {"role": "user", "content": "Hello"}
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "echo"
+    )
     assert body["reasoning_effort"] == "high"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_build_request_body_honors_effective_no_thinking(
     wafer_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "DeepSeek-V4-Pro",
@@ -95,7 +101,7 @@ def test_build_request_body_honors_effective_no_thinking(
 
 def test_build_request_body_preserves_request_disabled_thinking(
     wafer_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "DeepSeek-V4-Pro",
@@ -113,7 +119,7 @@ def test_build_request_body_preserves_request_disabled_thinking(
 
 def test_build_request_body_uses_resolved_policy_without_inspecting_model(
     wafer_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "DeepSeek-V4-Pro",
@@ -130,7 +136,7 @@ def test_build_request_body_uses_resolved_policy_without_inspecting_model(
 async def test_lists_models_from_openai_models_endpoint(
     monkeypatch: pytest.MonkeyPatch,
     wafer_provider: OpenAIChatProvider,
-):
+) -> None:
     mock_list = AsyncMock(
         return_value=MagicMock(
             data=[MagicMock(id="DeepSeek-V4-Pro"), MagicMock(id="MiniMax-M2.7")]
@@ -146,7 +152,7 @@ async def test_lists_models_from_openai_models_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(wafer_provider: OpenAIChatProvider):
+async def test_cleanup_closes_openai_client(wafer_provider: OpenAIChatProvider) -> None:
     wafer_provider._client = MagicMock()
     wafer_provider._client.close = AsyncMock()
 

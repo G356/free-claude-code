@@ -33,7 +33,12 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
-from tests.wire_payload import object_array, object_payload, string_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def unsigned_events(protocol: str):
@@ -63,7 +68,7 @@ def unsigned_events(protocol: str):
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 async def test_unsigned_thinking_has_only_client_native_history(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(protocol, lambda _: (200, unsigned_events(protocol))) as (
         send,
         _,
@@ -127,13 +132,13 @@ async def test_unsigned_thinking_has_only_client_native_history(
         )
 
 
-def test_unsigned_summary_becomes_ordinary_messages_thinking():
+def test_unsigned_summary_becomes_ordinary_messages_thinking() -> None:
     assert responses_reasoning_blocks(
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan."}]}
     ) == [{"type": "thinking", "thinking": "Plan."}]
 
 
-def test_standalone_google_signature_uses_protected_recovery_rule():
+def test_standalone_google_signature_uses_protected_recovery_rule() -> None:
     source = SourceRecoveryState(Mock())
     payload = {
         "choices": [
@@ -147,7 +152,7 @@ def test_standalone_google_signature_uses_protected_recovery_rule():
         SourceRecoveryState(Mock()).observe("chat", payload, continuing=True)
 
 
-def test_gemini_continuation_accepts_signature_but_keeps_failure_protected():
+def test_gemini_continuation_accepts_signature_but_keeps_failure_protected() -> None:
     source = SourceRecoveryState(Mock())
     source.observe(
         "gemini",
@@ -169,7 +174,7 @@ def test_gemini_continuation_accepts_signature_but_keeps_failure_protected():
     assert not source.can_handoff
 
 
-def test_gemini_signature_cannot_clear_unsupported_native_evidence():
+def test_gemini_signature_cannot_clear_unsupported_native_evidence() -> None:
     source = SourceRecoveryState(Mock())
     source.observe(
         "gemini",
@@ -201,7 +206,7 @@ def test_gemini_signature_cannot_clear_unsupported_native_evidence():
 @pytest.mark.parametrize("parsed", ["Independent parsed.", "Native 🧠é."])
 async def test_parsed_thinking_is_not_owned_by_native_signature(
     wire: WireProtocol, scalar_first: bool, parsed_first: bool, parsed: str
-):
+) -> None:
     native = "Native 🧠é."
     detail = {
         "type": "reasoning.text",
@@ -272,7 +277,9 @@ async def test_parsed_thinking_is_not_owned_by_native_signature(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_owned_thinking_and_answer_stream_before_late_signature(wire: str):
+async def test_owned_thinking_and_answer_stream_before_late_signature(
+    wire: str,
+) -> None:
     prefix = _chat_reasoning_events(
         [
             {"reasoning_content": "Native thought."},
@@ -338,7 +345,7 @@ async def test_owned_thinking_and_answer_stream_before_late_signature(wire: str)
 @pytest.mark.parametrize("echo", ["streamed", "merged", "cli"])
 async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
     echo: str,
-):
+) -> None:
     first = {
         "type": "reasoning.text",
         "text": "First.",
@@ -379,8 +386,12 @@ async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
             content["parts"] = [
                 part
                 for frame in parse_sse_text("".join(chunks))
-                for candidate in frame.data.get("candidates", [])
-                for part in candidate.get("content", {}).get("parts", [])
+                for candidate in array_payload(frame.data.get("candidates", []))
+                for part in array_payload(
+                    object_payload(object_payload(candidate).get("content", {})).get(
+                        "parts", []
+                    )
+                )
             ]
         elif echo == "cli":
             # Gemini CLI 0.29.5 processStreamResponse drops all thought Parts.

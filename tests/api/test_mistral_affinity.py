@@ -17,6 +17,7 @@ from free_claude_code.providers.mistral import MistralProvider
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_opencode import _chat_event_stream
+from tests.wire_payload import response_object
 
 
 @asynccontextmanager
@@ -95,7 +96,9 @@ async def mistral_wire(
         "x-fcc-launch-id",
     ],
 )
-async def test_affinity_for_existing_harness_identity(ingress: str, header: str):
+async def test_affinity_for_existing_harness_identity(
+    ingress: str, header: str
+) -> None:
     payload: JsonObject = {"model": "mistral/mistral-large-latest", "stream": True}
     if ingress == "messages":
         payload.update(messages=[{"role": "user", "content": "hello"}], max_tokens=128)
@@ -132,7 +135,7 @@ class InterruptedStream(httpx2.AsyncByteStream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_id", [None, "conversation-a"])
-async def test_nonstream_recovery_keeps_affinity(session_id: str | None):
+async def test_nonstream_recovery_keeps_affinity(session_id: str | None) -> None:
     async def handler(request: object, number: int):
         if number == 1:
             return httpx2.Response(
@@ -159,7 +162,7 @@ async def test_nonstream_recovery_keeps_affinity(session_id: str | None):
         )
         assert response.status_code == 200
         assert len(requests) == 2
-        assert "recovered" in str(response.json()["content"])
+        assert "recovered" in str(response_object(response)["content"])
         assert [request.headers.get("x-affinity") for request in requests] == [
             session_id,
             session_id,

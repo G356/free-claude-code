@@ -41,7 +41,7 @@ from tests.providers.support import (
 )
 from tests.providers.test_gemini import _sse
 from tests.web_tools_support import StubWebToolsClient
-from tests.wire_payload import int_payload, object_payload
+from tests.wire_payload import decode_object, int_payload, object_payload
 
 
 class ClassifierStream(SDKStreamDouble[ChatCompletionChunk]):
@@ -112,14 +112,20 @@ def classifier_request():
 @pytest.mark.parametrize("rejection", [None, "mandatory", "field", "unrelated"])
 async def test_native_gemini_classifier_preserves_reasoning_preparation(
     capability: str, off: bool, limit: int | None, rejection: str | None
-):
+) -> None:
     bodies = []
 
     def reply(request: native_httpx.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         config = body["generationConfig"]
-        if config["thinkingConfig"].get("thinkingBudget") == 0 and rejection:
+        if (
+            object_payload(object_payload(config)["thinkingConfig"]).get(
+                "thinkingBudget"
+            )
+            == 0
+            and rejection
+        ):
             error = {
                 "mandatory": {"message": "Thinking cannot be disabled"},
                 "field": {
@@ -166,12 +172,19 @@ async def test_native_gemini_classifier_preserves_reasoning_preparation(
             ]
             assert len(bodies) == (2 if off and rejection else 1)
         config = bodies[0]["generationConfig"]
-        assert config.get("maxOutputTokens") == limit
-        assert (config["thinkingConfig"].get("thinkingBudget") == 0) is off
+        assert object_payload(config).get("maxOutputTokens") == limit
+        assert (
+            object_payload(object_payload(config)["thinkingConfig"]).get(
+                "thinkingBudget"
+            )
+            == 0
+        ) is off
         if len(bodies) == 2:
             retried = bodies[1]["generationConfig"]
-            assert "maxOutputTokens" not in retried
-            assert "thinkingBudget" not in retried["thinkingConfig"]
+            assert "maxOutputTokens" not in object_payload(retried)
+            assert "thinkingBudget" not in object_payload(
+                object_payload(retried)["thinkingConfig"]
+            )
     finally:
         await provider.cleanup()
 
@@ -200,11 +213,11 @@ async def test_native_gemini_classifier_preserves_reasoning_preparation(
 )
 async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
     error: JsonObject, corrects: bool
-):
+) -> None:
     bodies = []
 
     def upstream(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         chunk: JsonObject = {
             "id": "gen-test",
             "object": "chat.completion.chunk",
@@ -279,7 +292,7 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
 )
 async def test_classifier_mandatory_reasoning_still_returns_verdict(
     reject_off: bool | str, stream: bool, fallback_effort: ReasoningPreference | None
-):
+) -> None:
     provider = OpenRouterProvider(
         make_provider_config(api_key="test", base_url="https://openrouter.test/v1"),
         admission=immediate_admission(),
@@ -367,7 +380,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
                 assert events[-1].event == "message_stop"
             else:
                 assert isinstance(response, JSONResponse)
-                message = json.loads(bytes(response.body))
+                message = decode_object(bytes(response.body))
                 assert message["content"] == [
                     {"type": "text", "text": "<severity>0</severity>"}
                 ]
@@ -391,7 +404,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
 )
 async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     capability: str, off: bool, limit: int
-):
+) -> None:
     provider = OpenRouterProvider(
         make_provider_config("test", "https://provider.invalid/v1"),
         admission=immediate_admission(),

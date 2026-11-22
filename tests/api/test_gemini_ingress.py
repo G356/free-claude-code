@@ -17,6 +17,7 @@ from free_claude_code.core.gemini.models import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.wire_payload import object_array, object_payload, response_object
 
 # Google documents /v1beta; Gemini SDKs given a custom base URL call /v1.
 PREFIXES = ("/v1beta/models", "/v1/models")
@@ -29,7 +30,9 @@ def body():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("model", ["model:free", "model%3Afree", "model:region:free"])
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_routed_model_preserves_colons(prefix: str, streaming: bool, model: str):
+def test_routed_model_preserves_colons(
+    prefix: str, streaming: bool, model: str
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
@@ -98,7 +101,7 @@ def fixture_provider():
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_generation_routes_use_the_selected_backend_and_release_lease(
     prefix: str, streaming: bool
-):
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     suffix = "streamGenerateContent?alt=sse" if streaming else "generateContent"
@@ -115,9 +118,11 @@ def test_generation_routes_use_the_selected_backend_and_release_lease(
         ]
         assert events[-1]["candidates"][0]["finishReason"] == "STOP"
     else:
-        value = response.json()
-        assert value["candidates"][0]["content"]["parts"] == [{"text": "Hello world"}]
-        assert value["usageMetadata"]["totalTokenCount"] == 5
+        value = response_object(response)
+        assert object_payload(object_array(value["candidates"])[0]["content"])[
+            "parts"
+        ] == [{"text": "Hello world"}]
+        assert object_payload(value["usageMetadata"])["totalTokenCount"] == 5
     assert len(calls) == 1
     assert calls[0][0].model == "backend"
     assert calls[0][1]["response_model"] == "public-model"
@@ -128,7 +133,7 @@ def test_generation_routes_use_the_selected_backend_and_release_lease(
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(
     prefix: str, credential: str
-):
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -168,7 +173,7 @@ def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_invalid_auth_is_a_google_error_before_inference(
     prefix: str, headers: dict[str, str], query: str
-):
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -183,8 +188,14 @@ def test_invalid_auth_is_a_google_error_before_inference(
             f"{prefix}/model:generateContent" + query, headers=headers, json=body()
         )
     assert response.status_code in {400, 401}, response.text
-    assert response.json()["error"]["code"] == response.status_code
-    assert response.json()["error"]["status"] in {"UNAUTHENTICATED", "INVALID_ARGUMENT"}
+    assert (
+        object_payload(response_object(response)["error"])["code"]
+        == response.status_code
+    )
+    assert object_payload(response_object(response)["error"])["status"] in {
+        "UNAUTHENTICATED",
+        "INVALID_ARGUMENT",
+    }
     assert not calls
 
 
@@ -200,7 +211,7 @@ def test_invalid_auth_is_a_google_error_before_inference(
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_invalid_or_unsupported_requests_are_rejected_before_inference(
     prefix: str, request_body: JsonObject
-):
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
@@ -226,7 +237,7 @@ def test_invalid_or_unsupported_requests_are_rejected_before_inference(
 )
 def test_gemini_route_family_errors_use_google_envelopes(
     method: str, path: str, status: int
-):
+) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
@@ -238,7 +249,7 @@ def test_gemini_route_family_errors_use_google_envelopes(
 
 
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_repeated_material_json_key_is_rejected_before_inference(prefix: str):
+def test_repeated_material_json_key_is_rejected_before_inference(prefix: str) -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
@@ -255,7 +266,7 @@ def test_repeated_material_json_key_is_rejected_before_inference(prefix: str):
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(
     prefix: str, console: bool
-):
+) -> None:
     config = uvicorn_log_config(console=console)
     loggers = config["loggers"]
     assert isinstance(loggers, dict)
@@ -295,11 +306,11 @@ def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(
 )
 def test_only_gemini_generation_methods_are_gemini_under_v1_models(
     path: str, expected: str | None
-):
+) -> None:
     assert generation_api(path) == expected
 
 
-def test_openai_model_list_is_unchanged_beside_the_gemini_route():
+def test_openai_model_list_is_unchanged_beside_the_gemini_route() -> None:
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:

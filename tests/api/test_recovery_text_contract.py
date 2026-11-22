@@ -1,6 +1,5 @@
 """Recovery must not fabricate structured items or misalign token metadata."""
 
-import json
 from copy import deepcopy
 
 import httpx
@@ -34,7 +33,13 @@ from tests.providers.test_anthropic_messages_transport import Endpoint, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import int_payload, object_array, object_payload, string_payload
+from tests.wire_payload import (
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 class Answer(BaseModel):
@@ -125,7 +130,7 @@ async def consume_structured(raw: str, *, failed: bool):
 @pytest.mark.parametrize("stage", ["healthy", "hidden_retry", "delivered_failure"])
 async def test_structured_request_keeps_healthy_output_and_failure_policy(
     protocol: str, kind: str, stage: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]) -> tuple[int, JsonValue]:
         if len(bodies) == 1 and stage == "hidden_retry":
             return 200, []
@@ -165,7 +170,7 @@ async def test_structured_request_keeps_healthy_output_and_failure_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_explicit_plain_text_format_can_continue(protocol: str):
+async def test_explicit_plain_text_format_can_continue(protocol: str) -> None:
     async with _harness(
         protocol,
         lambda bodies: (
@@ -190,7 +195,9 @@ async def test_explicit_plain_text_format_can_continue(protocol: str):
 @pytest.mark.parametrize(
     "path", ["native_messages", "translated_messages", "chat_extra"]
 )
-async def test_messages_structured_request_does_not_resume_partial_json(path: str):
+async def test_messages_structured_request_does_not_resume_partial_json(
+    path: str,
+) -> None:
     bodies: list[JsonObject] = []
     body: JsonObject = {
         "model": "requested",
@@ -214,7 +221,7 @@ async def test_messages_structured_request_does_not_resume_partial_json(path: st
     if path == "native_messages":
 
         def reply(request: httpx.Request):
-            bodies.append(json.loads(request.content))
+            bodies.append(decode_object(request.content))
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
@@ -303,7 +310,7 @@ def scored_events(text: str, location: str, *, value: JsonValue = True):
 )
 async def test_preserved_logprobs_prevent_text_reconstruction(
     location: str, continuing: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if continuing and len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -340,7 +347,7 @@ async def test_preserved_logprobs_prevent_text_reconstruction(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", [None, []])
-async def test_empty_logprobs_do_not_block_recovery(value: JsonValue):
+async def test_empty_logprobs_do_not_block_recovery(value: JsonValue) -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -359,7 +366,7 @@ async def test_empty_logprobs_do_not_block_recovery(value: JsonValue):
 
 
 @pytest.mark.asyncio
-async def test_healthy_logprob_payloads_are_preserved():
+async def test_healthy_logprob_payloads_are_preserved() -> None:
     source = scored_events("Hello world.", "all")
     async with _harness("responses", lambda _: (200, source)) as (send, bodies, _):
         raw = await delivered(
@@ -370,12 +377,17 @@ async def test_healthy_logprob_payloads_are_preserved():
     assert_completed(events, "responses")
     by_kind = {event.event: event.data for event in events}
     assert by_kind["response.output_text.delta"]["logprobs"] == source[3]["logprobs"]
-    assert events[-1].data["response"]["output"] == source[-1]["response"]["output"]
+    assert (
+        object_payload(events[-1].data["response"])["output"]
+        == source[-1]["response"]["output"]
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("continuing", [False, True])
-async def test_echoed_structured_format_prevents_reconstruction(continuing: bool):
+async def test_echoed_structured_format_prevents_reconstruction(
+    continuing: bool,
+) -> None:
     def reply(bodies: list[JsonObject]):
         events = text_events(
             "responses",
@@ -402,7 +414,7 @@ async def test_echoed_structured_format_prevents_reconstruction(continuing: bool
 @pytest.mark.parametrize("later_reasoning", [False, True])
 async def test_complete_calls_do_not_bypass_unsupported_text_guard(
     constraint: str, later_reasoning: bool
-):
+) -> None:
     prefix = text_events("responses", '{"value":', complete=False)
     if constraint == "logprobs":
         prefix = scored_events("Hello ", "delta")[:4]
@@ -436,7 +448,7 @@ async def test_complete_calls_do_not_bypass_unsupported_text_guard(
 )
 async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if protocol == "responses":
             events = scored_events("Hello " if len(bodies) == 1 else "world.", "all")
@@ -468,7 +480,7 @@ async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
 @pytest.mark.parametrize("constraint", ["structured", "logprobs"])
 async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(
     constraint: str,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -491,5 +503,8 @@ async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(
     assert len(bodies) == 2
     events = parse_sse_text(raw)
     assert events[-1].event == "response.failed"
-    assert events[-1].data["response"]["error"]["code"] == "context_length_exceeded"
+    assert (
+        object_payload(object_payload(events[-1].data["response"])["error"])["code"]
+        == "context_length_exceeded"
+    )
     assert public_text(events, "responses") == "Hello "

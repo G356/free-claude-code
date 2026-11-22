@@ -13,7 +13,8 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.wire_payload import object_array
 
 
 def origin(protocol: HistoryProtocol = "chat"):
@@ -39,11 +40,13 @@ def history():
     }
 
 
-def test_default_all_retains_old_reasoning_and_adds_empty_assistant_fields():
+def test_default_all_retains_old_reasoning_and_adds_empty_assistant_fields() -> None:
     body = history()
     original = deepcopy(body)
-    result = cast(dict[str, Any], prepare_history(body, origin()))
-    assistants = [m for m in result["messages"] if m["role"] == "assistant"]
+    result: JsonObject = prepare_history(body, origin())
+    assistants = [
+        m for m in object_array(result["messages"]) if m["role"] == "assistant"
+    ]
     assert [m.get("reasoning_content") for m in assistants] == ["Old", "", "New", ""]
     assert [m["content"] for m in assistants] == [
         "First answer",
@@ -55,7 +58,7 @@ def test_default_all_retains_old_reasoning_and_adds_empty_assistant_fields():
 
 
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
-def test_empty_placeholder_uses_destination_native_field(field: str):
+def test_empty_placeholder_uses_destination_native_field(field: str) -> None:
     result = prepare_history(
         {"messages": [{"role": "assistant", "content": "Answer"}]},
         origin(),
@@ -69,7 +72,7 @@ def test_empty_placeholder_uses_destination_native_field(field: str):
 @pytest.mark.parametrize("mode", list(HistoryMode))
 def test_discarded_protected_history_does_not_remove_included_empty_slot(
     field: str, explicit_empty: bool, mode: HistoryMode
-):
+) -> None:
     carrier = encode_replay(
         ReplayRecord(
             origin("responses"),
@@ -106,7 +109,7 @@ def test_discarded_protected_history_does_not_remove_included_empty_slot(
 @pytest.mark.parametrize("mode", list(HistoryMode))
 def test_retained_native_details_preserve_explicit_empty_without_inventing_it(
     explicit_empty: bool, mode: HistoryMode
-):
+) -> None:
     details = [{"type": "reasoning.encrypted", "data": "opaque"}]
     source = {
         "messages": [
@@ -135,7 +138,7 @@ def test_retained_native_details_preserve_explicit_empty_without_inventing_it(
     assert source == original
 
 
-def test_user_and_tool_result_messages_never_get_placeholders():
+def test_user_and_tool_result_messages_never_get_placeholders() -> None:
     body = {
         "messages": [
             {"role": "user", "content": "Question"},
@@ -153,24 +156,26 @@ def test_user_and_tool_result_messages_never_get_placeholders():
         ("none", [None, None, None, None]),
     ],
 )
-def test_three_scope_definitions_preserve_source(mode: str, expected: JsonValue):
+def test_three_scope_definitions_preserve_source(
+    mode: str, expected: JsonValue
+) -> None:
     from free_claude_code.core.history_replay import HistoryMode
 
     body = history()
     original = deepcopy(body)
-    result = cast(
-        dict[str, Any], prepare_history(body, origin(), scope=HistoryMode(mode))
-    )
+    result: JsonObject = prepare_history(body, origin(), scope=HistoryMode(mode))
     assert [
         m.get("reasoning_content")
-        for m in result["messages"]
+        for m in object_array(result["messages"])
         if m["role"] == "assistant"
     ] == expected
     assert body == original
 
 
 @pytest.mark.parametrize("mixed", [False, True])
-def test_messages_tool_result_envelopes_only_start_user_turn_when_mixed(mixed: bool):
+def test_messages_tool_result_envelopes_only_start_user_turn_when_mixed(
+    mixed: bool,
+) -> None:
     from free_claude_code.core.history_replay import HistoryMode
 
     content = [
@@ -205,7 +210,7 @@ def test_messages_tool_result_envelopes_only_start_user_turn_when_mixed(mixed: b
     assert "https://example.test/image" in str(current)
 
 
-def test_current_without_user_includes_existing_assistant():
+def test_current_without_user_includes_existing_assistant() -> None:
     from free_claude_code.core.history_replay import HistoryMode
 
     body = {"messages": [{"role": "assistant", "content": "Answer"}]}
@@ -215,7 +220,7 @@ def test_current_without_user_includes_existing_assistant():
 
 
 @pytest.mark.parametrize("mode", ["all", "current", "none"])
-def test_native_records_stay_exact_in_all_modes(mode: str):
+def test_native_records_stay_exact_in_all_modes(mode: str) -> None:
     from free_claude_code.core.history_replay import HistoryMode
 
     native = {
@@ -244,7 +249,7 @@ def test_native_records_stay_exact_in_all_modes(mode: str):
     assert ("Editable" in str(projected)) == (mode == "all")
 
 
-def test_unsigned_response_summary_is_messages_thinking_without_prose():
+def test_unsigned_response_summary_is_messages_thinking_without_prose() -> None:
     from free_claude_code.core.history_replay import responses_reasoning_blocks
 
     assert responses_reasoning_blocks(
@@ -255,7 +260,7 @@ def test_unsigned_response_summary_is_messages_thinking_without_prose():
     ) == [{"type": "thinking", "thinking": "Summary"}]
 
 
-def test_native_messages_readable_foreign_carrier_reaches_shared_projection():
+def test_native_messages_readable_foreign_carrier_reaches_shared_projection() -> None:
     from free_claude_code.core.anthropic.passthrough import restore_native_history
     from free_claude_code.core.history_replay import (
         HistoryMode,

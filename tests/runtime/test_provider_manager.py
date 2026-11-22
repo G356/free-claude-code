@@ -15,6 +15,7 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.mock_calls import keyword_arguments, positional_arguments
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 
 
@@ -94,7 +95,9 @@ def _settings(model: str) -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_discovery_error_follows_attempt_and_generation_without_losing_cache():
+async def test_discovery_error_follows_attempt_and_generation_without_losing_cache() -> (
+    None
+):
     factory = RuntimeFactory()
     settings = _settings("nvidia_nim/one")
     manager = ProviderRuntimeManager(settings, runtime_factory=factory)
@@ -169,7 +172,9 @@ async def test_startup_generation_lease_and_shutdown_close_exactly_once() -> Non
 
 
 @pytest.mark.asyncio
-async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it():
+async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it() -> (
+    None
+):
     provider_id = "custom_" + "c" * 32
     definition = {
         "provider_id": provider_id,
@@ -382,7 +387,7 @@ async def test_catalog_publication_failure_is_warning_only_and_secret_safe() -> 
     log_blob = " ".join(
         str(value)
         for call in warning.call_args_list
-        for value in (*call.args, *call.kwargs.values())
+        for value in (*positional_arguments(call), *keyword_arguments(call).values())
     )
     assert "PermissionError" in log_blob
     assert secret not in log_blob

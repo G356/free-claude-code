@@ -1,7 +1,6 @@
 """Sampling compatibility follows actual upstream rejections, not model IDs."""
 
 import asyncio
-import json
 from copy import deepcopy
 from typing import Any, Literal, overload
 
@@ -34,6 +33,7 @@ from tests.providers.test_openai_responses_transport import (
     _collect_native,
     _transport,
 )
+from tests.wire_payload import array_payload, decode_object
 
 
 @overload
@@ -71,7 +71,7 @@ def _stream(
     return provider.stream_responses(request, reasoning=reasoning)
 
 
-def _rejection(param: str, *, default_only: bool = False) -> dict[str, Any]:
+def _rejection(param: str, *, default_only: bool = False) -> dict[str, str]:
     # Captured HTTP error shapes; stream variants below are compatibility contracts.
     return {
         "type": "invalid_request_error",
@@ -122,11 +122,11 @@ def _success():
 )
 async def test_supported_sampling_is_never_removed_proactively(
     ingress: Literal["messages", "responses"], model: str, reasoning: ReasoningPolicy
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _success()
 
     provider = _provider(httpx2.MockTransport(handler))
@@ -149,11 +149,11 @@ async def test_only_explicitly_rejected_sampling_is_removed(
     surface: str,
     param: str,
     default_only: bool,
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if param in body:
             return _failure(_rejection(param, default_only=default_only), surface)
@@ -180,12 +180,12 @@ async def test_only_explicitly_rejected_sampling_is_removed(
 @pytest.mark.parametrize("concurrent", [False, True])
 async def test_two_rejections_are_request_local(
     ingress: Literal["messages", "responses"], order: tuple[str, ...], concurrent: bool
-):
+) -> None:
     bodies = []
     both_started = asyncio.Event()
 
     async def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if concurrent and all(param in body for param in order):
             if sum(all(param in item for param in order) for item in bodies) == 2:
@@ -239,11 +239,13 @@ async def test_two_rejections_are_request_local(
         "Unsupported parameter: temperature",
     ],
 )
-async def test_ambiguous_or_unrelated_validation_is_not_corrected(error: JsonValue):
+async def test_ambiguous_or_unrelated_validation_is_not_corrected(
+    error: JsonValue,
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(error)
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=3)
@@ -260,11 +262,13 @@ async def test_ambiguous_or_unrelated_validation_is_not_corrected(error: JsonVal
 @pytest.mark.parametrize(
     "status, attempts", [(401, 1), (403, 1), (422, 1), (429, 2), (500, 2)]
 )
-async def test_other_http_failures_do_not_remove_sampling(status: int, attempts: int):
+async def test_other_http_failures_do_not_remove_sampling(
+    status: int, attempts: int
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"), status=status)
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=2)
@@ -280,7 +284,9 @@ async def test_other_http_failures_do_not_remove_sampling(status: int, attempts:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reasoning_first", [False, True])
-async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool):
+async def test_reasoning_and_sampling_corrections_compose(
+    reasoning_first: bool,
+) -> None:
     reasoning_error = {
         "code": "unsupported_value",
         "param": "reasoning.effort",
@@ -293,7 +299,7 @@ async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool)
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) <= len(errors):
             return _failure(errors[len(bodies) - 1])
         return _success()
@@ -317,11 +323,11 @@ async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget", [1, 2, 3])
-async def test_sampling_corrections_share_the_attempt_budget(budget: int):
+async def test_sampling_corrections_share_the_attempt_budget(budget: int) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if len(bodies) == 1:
             return _failure({"code": "server_error", "message": "busy"}, status=500)
@@ -342,11 +348,11 @@ async def test_sampling_corrections_share_the_attempt_budget(budget: int):
 
 
 @pytest.mark.asyncio
-async def test_rejection_of_an_already_removed_field_stops_correction():
+async def test_rejection_of_an_already_removed_field_stops_correction() -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"))
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=5)
@@ -363,7 +369,7 @@ async def test_rejection_of_an_already_removed_field_stops_correction():
 @pytest.mark.parametrize("history_first", [False, True])
 async def test_history_and_sampling_corrections_preserve_each_other(
     history_first: bool,
-):
+) -> None:
     history_error = {
         "code": "invalid_encrypted_content",
         "param": "input[0].encrypted_content",
@@ -375,7 +381,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) <= 2:
             return _failure(errors[len(bodies) - 1])
         return _success()
@@ -404,7 +410,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(
     expected = deepcopy(bodies[0])
     for index, error in enumerate(errors):
         if error is history_error:
-            expected["input"][0] = {
+            array_payload(expected["input"])[0] = {
                 "role": "assistant",
                 "content": "Saved reasoning",
             }
@@ -421,12 +427,12 @@ async def test_history_and_sampling_corrections_preserve_each_other(
 @pytest.mark.parametrize("committed", [False, True])
 async def test_sampling_correction_respects_stream_commitment(
     ingress: Literal["messages", "responses"], committed: bool
-):
+) -> None:
     bodies = []
     partial = "x" * 70_000 if committed else "discarded"
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) > 1:
             return _success()
         return httpx2.Response(
@@ -477,7 +483,7 @@ async def test_sampling_correction_respects_stream_commitment(
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_without_a_parameter_is_not_guessed():
+async def test_stream_failure_without_a_parameter_is_not_guessed() -> None:
     calls = 0
 
     def handler(_request):
@@ -495,11 +501,11 @@ async def test_stream_failure_without_a_parameter_is_not_guessed():
 
 
 @pytest.mark.asyncio
-async def test_shared_transport_does_not_apply_openai_api_sampling_correction():
+async def test_shared_transport_does_not_apply_openai_api_sampling_correction() -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"))
 
     client = _client(handler)

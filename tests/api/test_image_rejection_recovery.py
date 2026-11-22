@@ -12,10 +12,17 @@ from openai import AsyncOpenAI
 
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 IMAGE_DATA = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nGQAAAAASUVORK5CYII="
 IMAGE_URL = f"data:image/png;base64,{IMAGE_DATA}"
@@ -112,13 +119,13 @@ def image_request(wire: str) -> tuple[str, dict[str, object]]:
     }
 
 
-def sent_parts(request: httpx2.Request) -> list[dict[str, object]]:
-    body = json.loads(request.content)
+def sent_parts(request: httpx2.Request) -> list[JsonObject]:
+    body = decode_object(request.content)
     return [
         part
-        for message in body["messages"]
-        if isinstance(message.get("content"), list)
-        for part in message["content"]
+        for message in array_payload(body["messages"])
+        if isinstance(object_payload(message).get("content"), list)
+        for part in object_array(object_payload(message)["content"])
     ]
 
 
@@ -171,7 +178,7 @@ def text_only_upstream(requests: list[httpx2.Request], *, in_stream: bool):
 @pytest.mark.parametrize("wire", WIRES)
 def test_rejected_image_is_replaced_by_a_note_and_remembered(
     wire: str, in_stream: bool
-):
+) -> None:
     requests: list[httpx2.Request] = []
     provider, app = nim_app(text_only_upstream(requests, in_stream=in_stream))
     path, payload = image_request(wire)
@@ -191,12 +198,14 @@ def test_rejected_image_is_replaced_by_a_note_and_remembered(
     assert [note_sent(request) for request in requests] == [False, True, True]
 
 
-def test_a_model_that_accepts_images_still_receives_them():
+def test_a_model_that_accepts_images_still_receives_them() -> None:
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        if json.loads(request.content)["model"] == "text-only" and image_sent(request):
+        if decode_object(request.content)["model"] == "text-only" and image_sent(
+            request
+        ):
             return vllm_rejection(in_stream=True)
         return chat_reply("Done.")
 
@@ -210,7 +219,7 @@ def test_a_model_that_accepts_images_still_receives_them():
     finally:
         asyncio.run(provider.cleanup())
 
-    assert [json.loads(request.content)["model"] for request in requests] == [
+    assert [decode_object(request.content)["model"] for request in requests] == [
         "text-only",
         "text-only",
         "vision",
@@ -219,7 +228,7 @@ def test_a_model_that_accepts_images_still_receives_them():
 
 
 @pytest.mark.parametrize("in_stream", [True, False])
-def test_rejection_of_a_request_without_media_is_not_retried(in_stream: bool):
+def test_rejection_of_a_request_without_media_is_not_retried(in_stream: bool) -> None:
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:

@@ -21,11 +21,16 @@ from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
-async def test_completion_proof_survives_replay_hold_until_later_text():
+async def test_completion_proof_survives_replay_hold_until_later_text() -> None:
     observed = []
 
     async def source():
@@ -58,7 +63,7 @@ async def test_completion_proof_survives_replay_hold_until_later_text():
 @pytest.mark.parametrize("snapshot_only", [False, True])
 async def test_continuation_preserves_call_completed_by_terminal_snapshot(
     preceding_text: bool, snapshot_only: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -97,12 +102,16 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
     events = parse_sse_text(raw)
     assert len(bodies) == 2
     assert events[-1].event == "response.completed", events[-1].data
-    output = events[-1].data["response"]["output"]
-    calls = [item for item in output if item["type"] == "function_call"]
+    output = object_payload(events[-1].data["response"])["output"]
+    calls = [
+        item
+        for item in array_payload(output)
+        if object_payload(item)["type"] == "function_call"
+    ]
     assert len(calls) == 1
-    assert calls[0]["call_id"] == "call_probe"
-    assert calls[0]["arguments"] == '{"path":"file"}'
-    assert calls[0]["status"] == "completed"
+    assert object_payload(calls[0])["call_id"] == "call_probe"
+    assert object_payload(calls[0])["arguments"] == '{"path":"file"}'
+    assert object_payload(calls[0])["status"] == "completed"
     assert public_text(events, "responses") == "Hello " + (
         "world." if preceding_text else ""
     )
@@ -110,7 +119,9 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("activity", ["metadata", "withheld_tools", "text"])
-async def test_body_correction_depends_on_current_attempt_publication(activity: str):
+async def test_body_correction_depends_on_current_attempt_publication(
+    activity: str,
+) -> None:
     visible = activity == "text"
 
     def reply(bodies: list[JsonObject]):
@@ -159,7 +170,7 @@ async def test_body_correction_depends_on_current_attempt_publication(activity: 
 
 
 @pytest.mark.asyncio
-async def test_released_tool_packet_is_complete_before_upstream_resumes():
+async def test_released_tool_packet_is_complete_before_upstream_resumes() -> None:
     resumed = []
     states = []
 
@@ -190,14 +201,14 @@ async def test_released_tool_packet_is_complete_before_upstream_resumes():
 @pytest.mark.asyncio
 async def test_public_transform_failure_preserves_returned_packets_and_emits_error(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     original = ContinuationStream.prepare
     closed = []
 
     def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
             raise ValueError("public transform failed")
-        return original(self, payload)
+        return original(self, object_payload(payload))
 
     monkeypatch.setattr(ContinuationStream, "prepare", prepare)
 
@@ -237,7 +248,9 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["Hello world.", "world.", "Hello ", ""])
-async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: str):
+async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(
+    text: str,
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -254,9 +267,13 @@ async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: 
         "response.completed" if "world" in text else "response.failed"
     )
     if "world" in text:
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
-            "".join(part["text"] for item in output for part in item.get("content", []))
+            "".join(
+                string_payload(part["text"])
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
+            )
             == "Hello world."
         )
 
@@ -265,7 +282,7 @@ async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: 
 @pytest.mark.parametrize("kind", ["reasoning", "web_search_call", "message"])
 async def test_final_only_native_state_is_checked_before_continuation_publication(
     kind: str,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -292,7 +309,7 @@ async def test_final_only_native_state_is_checked_before_continuation_publicatio
 
 
 @pytest.mark.asyncio
-async def test_filtered_snapshot_does_not_change_overlap_target_identity():
+async def test_filtered_snapshot_does_not_change_overlap_target_identity() -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -316,12 +333,15 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
     assert "call_0" not in raw
     assert public_text(events, "responses") == "Hello world."
     assert [
-        item["content"][0]["text"] for item in events[-1].data["response"]["output"]
+        object_array(object_payload(item)["content"])[0]["text"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
     ] == ["Hello ", "world."]
 
 
 @pytest.mark.asyncio
-async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt():
+async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt() -> (
+    None
+):
     attempts = []
 
     async def source():
@@ -359,7 +379,7 @@ async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_atte
 @pytest.mark.parametrize("visible", [False, True])
 async def test_shared_correction_guard_uses_public_attempt_effects(
     monkeypatch: pytest.MonkeyPatch, protocol: str, wire: WireProtocol, visible: bool
-):
+) -> None:
     marker = "injected request correction"
     proposals = []
 

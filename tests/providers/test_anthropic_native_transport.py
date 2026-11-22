@@ -15,13 +15,14 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from free_claude_code.providers.history_replay import replay_origin
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import decode_object, object_array, object_payload
 
 
 async def collect(
@@ -47,7 +48,7 @@ async def collect(
 
 
 @pytest.mark.asyncio
-async def test_native_omissions_helpers_controls_and_cookie_isolation():
+async def test_native_omissions_helpers_controls_and_cookie_isolation() -> None:
     received = []
 
     def handle(request: httpx.Request):
@@ -90,7 +91,7 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
             },
         )
         await collect(p)
-        sent = json.loads(received[0].content)
+        sent = decode_object(received[0].content)
         assert "stream" not in sent and "max_tokens" not in sent
         assert "original_model" not in sent and "resolved_provider_model" not in sent
         assert "betas" not in sent and "extra_body" not in sent
@@ -120,7 +121,7 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
         {"stream": True},
     ],
 )
-async def test_helpers_cannot_override_transport_ownership(helper: JsonObject):
+async def test_helpers_cannot_override_transport_ownership(helper: JsonObject) -> None:
     def handle(request: object):
         raise AssertionError("Invalid helpers reached upstream")
 
@@ -133,7 +134,7 @@ async def test_helpers_cannot_override_transport_ownership(helper: JsonObject):
 
 
 @pytest.mark.asyncio
-async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
+async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn() -> None:
     events = _events(stop="pause_turn")
     content_block: JsonObject = {
         "type": "server_tool_use",
@@ -191,8 +192,8 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="alias"))
         )
-        expected = json.loads(json.dumps(events))
-        expected[0]["message"]["model"] = "alias"
+        expected = load_json_value(json.dumps(events))
+        object_payload(object_array(expected)[0]["message"])["model"] = "alias"
         assert [event.data for event in output] == expected
         assert wire.closed
     finally:
@@ -204,7 +205,7 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
 @pytest.mark.parametrize("status", [401, 402, 403, 429, 529])
 async def test_http_failure_status_evidence_and_bounded_recovery(
     streaming: bool, status: int
-):
+) -> None:
     wires = []
 
     def handle(request: object):
@@ -245,7 +246,7 @@ async def test_http_failure_status_evidence_and_bounded_recovery(
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_connection_recovery_before_output_closes_failed_response(
     streaming: bool,
-):
+) -> None:
     first = Wire([httpx.ReadError("connection closed")])
     second = Wire(
         [
@@ -275,7 +276,9 @@ async def test_connection_recovery_before_output_closes_failed_response(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming: bool):
+async def test_connect_timeout_before_acceptance_uses_admission_retry(
+    streaming: bool,
+) -> None:
     calls = 0
     success = Wire(
         [
@@ -309,7 +312,9 @@ async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["error", "connection", "eof"])
-async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure: str):
+async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(
+    failure: str,
+) -> None:
     tail = {
         "error": _sse({"type": "error", "error": {"type": "overloaded_error"}}),
         "connection": httpx.ReadError("connection lost"),
@@ -350,7 +355,7 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure: st
 )
 async def test_malformed_or_incomplete_stream_after_output_never_replays(
     bad_tail: bytes,
-):
+) -> None:
     calls = []
     wire = Wire([_sse(_events()[0]), bad_tail])
 
@@ -376,7 +381,7 @@ async def test_malformed_or_incomplete_stream_after_output_never_replays(
 
 
 @pytest.mark.asyncio
-async def test_early_consumer_exit_releases_admission_and_response():
+async def test_early_consumer_exit_releases_admission_and_response() -> None:
     wire = Wire([_sse(*_events())])
 
     def callback(request: object):
@@ -398,7 +403,7 @@ async def test_early_consumer_exit_releases_admission_and_response():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_cancelled_read_closes_response_without_retry(streaming: bool):
+async def test_cancelled_read_closes_response_without_retry(streaming: bool) -> None:
     reading = asyncio.Event()
     closed = asyncio.Event()
     calls = []
@@ -434,11 +439,13 @@ async def test_cancelled_read_closes_response_without_retry(streaming: bool):
 
 
 @pytest.mark.asyncio
-async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign():
+async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign() -> (
+    None
+):
     received = []
 
     def handle(request: httpx.Request):
-        received.append(json.loads(request.content))
+        received.append(decode_object(request.content))
         return httpx.Response(
             200, json={"stop_reason": "end_turn", "type": "message", "content": []}
         )
@@ -465,7 +472,7 @@ async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign
     ]
     try:
         await collect(p, body)
-        assert received[0]["messages"][0]["content"] == [native]
+        assert object_array(received[0]["messages"])[0]["content"] == [native]
         body["messages"][0]["content"][0]["signature"] = encode_replay(
             ReplayRecord(replace(origin, provider="foreign"), native)
         )

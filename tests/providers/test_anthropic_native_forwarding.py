@@ -7,11 +7,14 @@ evidence reach the upstream or the client unchanged.
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -25,14 +28,15 @@ from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import object_payload
 
 
 @pytest.fixture
 def traces() -> Iterator[list[dict[str, Any]]]:
     payloads: list[dict[str, Any]] = []
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             payloads.append(payload)
 
@@ -72,7 +76,7 @@ def _stream(*chunks: bytes) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_client_protocol_headers_reach_upstream(streaming: bool):
+async def test_client_protocol_headers_reach_upstream(streaming: bool) -> None:
     received: list[httpx.Request] = []
 
     def handle(request: httpx.Request):
@@ -101,7 +105,7 @@ async def test_client_protocol_headers_reach_upstream(streaming: bool):
 
 
 @pytest.mark.asyncio
-async def test_context_window_stop_reaches_the_client_as_a_stop():
+async def test_context_window_stop_reaches_the_client_as_a_stop() -> None:
     def callback(request: object):
         return _stream(_sse(*_events(stop="model_context_window_exceeded")))
 
@@ -112,7 +116,7 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
         await p.cleanup()
 
     stops = [
-        event.data["delta"]["stop_reason"]
+        object_payload(event.data["delta"])["stop_reason"]
         for event in parse_sse_text("".join(frames))
         if event.data["type"] == "message_delta"
     ]
@@ -120,7 +124,9 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
 
 
 @pytest.mark.asyncio
-async def test_error_event_failure_carries_upstream_evidence(traces: list[JsonObject]):
+async def test_error_event_failure_carries_upstream_evidence(
+    traces: list[JsonObject],
+) -> None:
     error: JsonObject = {
         "type": "error",
         "error": {"type": "invalid_request_error", "message": "native evidence"},

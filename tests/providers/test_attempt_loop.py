@@ -4,11 +4,14 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.diagnostics import attach_upstream_error_body
@@ -105,8 +108,8 @@ class Record:
 def record() -> Iterator[Record]:
     result = Record()
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             result.traces.append(payload)
 
@@ -214,7 +217,7 @@ def _plan(
 @pytest.mark.asyncio
 async def test_success_prepares_before_admission_and_traces_its_lifecycle(
     record: Record,
-):
+) -> None:
     frames, raised = await _run(record, Step(frames=("a", "b")))
 
     assert (frames, raised) == (["a", "b"], None)
@@ -228,7 +231,9 @@ async def test_success_prepares_before_admission_and_traces_its_lifecycle(
 
 
 @pytest.mark.asyncio
-async def test_preparation_failure_opens_no_attempt_and_is_terminal(record: Record):
+async def test_preparation_failure_opens_no_attempt_and_is_terminal(
+    record: Record,
+) -> None:
     frames, raised = await _run(record, Step(prepare_error=_failure(503)), Step())
 
     assert isinstance(raised, ExecutionFailure) and raised.status_code == 503
@@ -240,7 +245,7 @@ async def test_preparation_failure_opens_no_attempt_and_is_terminal(record: Reco
 @pytest.mark.asyncio
 async def test_retryable_failure_before_acceptance_retries_the_same_body(
     record: Record,
-):
+) -> None:
     frames, raised = await _run(record, Step(error=_failure(503)), Step(frames=("ok",)))
 
     assert (frames, raised) == (["abandoned", "ok"], None)
@@ -267,7 +272,9 @@ def _teaching(rejections: list[Rejection], lesson: _Taught) -> CorrectionStep:
 
 
 @pytest.mark.asyncio
-async def test_corrected_rejection_retries_with_the_corrected_body(record: Record):
+async def test_corrected_rejection_retries_with_the_corrected_body(
+    record: Record,
+) -> None:
     rejections: list[Rejection] = []
     lesson = _Taught()
 
@@ -289,7 +296,7 @@ async def test_corrected_rejection_retries_with_the_corrected_body(record: Recor
 
 
 @pytest.mark.asyncio
-async def test_a_lesson_is_applied_even_when_no_attempt_remains(record: Record):
+async def test_a_lesson_is_applied_even_when_no_attempt_remains(record: Record) -> None:
     lesson = _Taught()
 
     _, raised = await _run(
@@ -305,7 +312,7 @@ async def test_a_lesson_is_applied_even_when_no_attempt_remains(record: Record):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_attempts_raise_the_resolved_failure(record: Record):
+async def test_exhausted_attempts_raise_the_resolved_failure(record: Record) -> None:
     frames, raised = await _run(
         record, Step(error=_failure(503)), Step(error=_failure(503)), max_attempts=2
     )
@@ -318,7 +325,7 @@ async def test_exhausted_attempts_raise_the_resolved_failure(record: Record):
 
 
 @pytest.mark.asyncio
-async def test_unsafe_failure_owes_no_abandoned_frames(record: Record):
+async def test_unsafe_failure_owes_no_abandoned_frames(record: Record) -> None:
     frames, raised = await _run(
         record, Step(frames=("a",), error=_failure(503, unsafe=True)), max_attempts=1
     )
@@ -328,7 +335,7 @@ async def test_unsafe_failure_owes_no_abandoned_frames(record: Record):
 
 
 @pytest.mark.asyncio
-async def test_unresolvable_error_is_raised_without_resolution(record: Record):
+async def test_unresolvable_error_is_raised_without_resolution(record: Record) -> None:
     error = _Unresolvable("local check")
     frames, raised = await _run(record, Step(error=error), Step(frames=("ok",)))
 
@@ -339,7 +346,7 @@ async def test_unresolvable_error_is_raised_without_resolution(record: Record):
 
 
 @pytest.mark.asyncio
-async def test_unfinalized_failure_is_raised_as_itself(record: Record):
+async def test_unfinalized_failure_is_raised_as_itself(record: Record) -> None:
     error = _Unfinalized("caller error")
     _, raised = await _run(record, Step(error=error), max_attempts=1)
 
@@ -367,7 +374,9 @@ def _delivered(text: str) -> StreamDeliveryState:
 
 
 @pytest.mark.asyncio
-async def test_preparation_failure_after_delivered_content_is_terminal(record: Record):
+async def test_preparation_failure_after_delivered_content_is_terminal(
+    record: Record,
+) -> None:
     # The first attempt delivers text and fails, so the loop continues. A
     # retryable credential failure while preparing that continuation must end
     # the execution: it spent no attempt, so continuing again would never stop.
@@ -389,7 +398,9 @@ async def test_preparation_failure_after_delivered_content_is_terminal(record: R
 
 
 @pytest.mark.asyncio
-async def test_early_close_finishes_transport_cleanup_before_releasing_admission():
+async def test_early_close_finishes_transport_cleanup_before_releasing_admission() -> (
+    None
+):
     events: list[str] = []
 
     class Resource:
@@ -419,7 +430,7 @@ async def test_early_close_finishes_transport_cleanup_before_releasing_admission
 
 
 @pytest.mark.asyncio
-async def test_hidden_stop_accepts_and_never_restarts(record: Record):
+async def test_hidden_stop_accepts_and_never_restarts(record: Record) -> None:
     frames, raised = await _run(
         record,
         Step(error=TIMEOUT, normal_stop=True),
@@ -434,7 +445,7 @@ async def test_hidden_stop_accepts_and_never_restarts(record: Record):
 
 
 @pytest.mark.asyncio
-async def test_accepted_undelivered_attempt_restarts_cleanly(record: Record):
+async def test_accepted_undelivered_attempt_restarts_cleanly(record: Record) -> None:
     frames, raised = await _run(
         record,
         Step(frames=("a",), error=TIMEOUT),
@@ -469,7 +480,7 @@ async def test_delivered_content_recovers_publicly(
     recovered: PublicRecovery,
     frames: list[str],
     kinds: list[ProviderOperationKind],
-):
+) -> None:
     def replace_public_recovery(*_: object, **__: object):
         return recovered
 
@@ -486,7 +497,7 @@ async def test_delivered_content_recovers_publicly(
 
 
 @pytest.mark.asyncio
-async def test_terminal_report_and_message_trace_are_opt_in(record: Record):
+async def test_terminal_report_and_message_trace_are_opt_in(record: Record) -> None:
     reported: list[Exception] = []
     rejected = _failure(400)
     _, raised = await _run(
@@ -506,7 +517,7 @@ async def test_terminal_report_and_message_trace_are_opt_in(record: Record):
 @pytest.mark.parametrize("upstream_evidence", [False, True])
 async def test_upstream_evidence_is_reported_only_when_requested(
     record: Record, upstream_evidence: bool
-):
+) -> None:
     rejected = _failure(400)
     attach_upstream_error_body(rejected, '{"type":"error","detail":"evidence"}')
     _, raised = await _run(

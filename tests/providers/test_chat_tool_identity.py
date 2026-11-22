@@ -12,6 +12,7 @@ from free_claude_code.core.chat_completions.tool_calls import (
 )
 from free_claude_code.core.json_types import JsonObject
 from tests.core.test_chat_tool_buffer import event
+from tests.wire_payload import object_payload
 
 
 def call(
@@ -45,8 +46,8 @@ def call_consumer():
         return [
             {
                 "id": item.body.get("id"),
-                "name": item.body["function"]["name"],
-                "arguments": item.body["function"]["arguments"],
+                "name": object_payload(item.body["function"])["name"],
+                "arguments": object_payload(item.body["function"])["arguments"],
                 "metadata": item.body.get("extra_content"),
             }
             for item in output
@@ -64,7 +65,7 @@ def test_parallel_calls_keep_arguments_and_metadata(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
     indexes: tuple[int | str | None, ...],
     fragmented: bool,
-):
+) -> None:
     add, completed = call_consumer
     arguments = ['{"path":"a"}', '{"path":"b"}']
     for index, tool_id, argument in zip(
@@ -107,7 +108,7 @@ def test_parallel_calls_keep_arguments_and_metadata(
 
 def test_allocated_slots_do_not_alias_later_raw_indexes(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
-):
+) -> None:
     add, completed = call_consumer
     for index, tool_id, arguments in (
         (0, "call_a", '{"path":"a"}'),
@@ -126,7 +127,7 @@ def test_allocated_slots_do_not_alias_later_raw_indexes(
 def test_unusable_index_keeps_fragments_of_one_id_together(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
     index: int | str | None,
-):
+) -> None:
     add, completed = call_consumer
     add(call(index, "call_a", '{"path":', name=None))
     add(call(index, "call_a", '"a"}'))
@@ -145,7 +146,7 @@ def test_partial_identity_can_learn_missing_fields(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
     first: JsonObject,
     second: JsonObject,
-):
+) -> None:
     add, completed = call_consumer
     add(first)
     add(second)
@@ -162,7 +163,7 @@ def test_partial_identity_can_learn_missing_fields(
 def test_disjoint_partial_identities_keep_content_separate(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
     identities: list[tuple[int | str | None, str | None]],
-):
+) -> None:
     add, completed = call_consumer
     for (index, tool_id), path in zip(identities[:2], ("a", "b"), strict=True):
         add(
@@ -183,7 +184,7 @@ def test_disjoint_partial_identities_keep_content_separate(
 
 def test_new_index_does_not_attach_to_unindexed_calls(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
-):
+) -> None:
     add, completed = call_consumer
     add(call(None, "call_a", '{"path":"a"}'))
     add(call(None, "call_b", '{"path":"b"}'))
@@ -205,7 +206,7 @@ def test_unidentified_fragment_is_rejected_before_content_changes(
     index: bool | int | str | None,
     tool_id: str | None,
     existing: bool,
-):
+) -> None:
     add, completed = call_consumer
     if existing:
         add(call(0, "call_a", '{"path":"a"}', metadata={"original": True}))
@@ -230,7 +231,7 @@ def test_ambiguous_fragment_is_rejected_before_content_changes(
     call_consumer: tuple[Callable[[JsonObject], None], Callable[[], list[JsonObject]]],
     initial: list[JsonObject],
     fragment: JsonObject,
-):
+) -> None:
     add, completed = call_consumer
     for delta in initial:
         add(delta)

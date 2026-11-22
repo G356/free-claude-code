@@ -28,7 +28,7 @@ from tests.wire_payload import array_payload, object_array, object_payload
 @pytest.mark.asyncio
 async def test_partial_closure_with_delayed_source_frames(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     original_transport = httpx2.MockTransport
 
     class PacedStream(httpx2.AsyncByteStream):
@@ -94,7 +94,7 @@ async def test_partial_closure_with_delayed_source_frames(
 )
 async def test_reasoning_before_continuation_text_keeps_overlap_filter(
     wire: WireProtocol, candidate: str, expected: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
@@ -144,7 +144,7 @@ def refusal_events(*, mixed: bool = False):
 @pytest.mark.parametrize("limited", [False, True])
 async def test_continuation_preserves_refusal_and_completed_metadata(
     monkeypatch: pytest.MonkeyPatch, mixed: bool, limited: bool
-):
+) -> None:
     if limited:
         monkeypatch.setattr(
             "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 600
@@ -165,14 +165,14 @@ async def test_continuation_preserves_refusal_and_completed_metadata(
     events = parse_sse_text(raw)
     assert_completed(events, "responses")
     assert len(bodies) == 2
-    output = events[-1].data["response"]["output"]
+    output = object_payload(events[-1].data["response"])["output"]
     assert output == [
         event.data["item"]
         for event in events
         if event.event == "response.output_item.done"
     ]
-    assert output[-1]["phase"] == "final_answer"
-    assert output[-1]["content"][-1] == {
+    assert object_array(output)[-1]["phase"] == "final_answer"
+    assert array_payload(object_array(output)[-1]["content"])[-1] == {
         "type": "refusal",
         "refusal": "I cannot continue that request.",
     }
@@ -180,7 +180,7 @@ async def test_continuation_preserves_refusal_and_completed_metadata(
 
 
 @pytest.mark.asyncio
-async def test_published_refusal_interruption_does_not_generate_again():
+async def test_published_refusal_interruption_does_not_generate_again() -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -198,14 +198,18 @@ async def test_published_refusal_interruption_does_not_generate_again():
     assert len(bodies) == 2
     assert events[-1].event == "response.failed"
     assert (
-        events[-1].data["response"]["output"][-1]["content"][-1]["refusal"]
+        object_array(
+            object_array(object_payload(events[-1].data["response"])["output"])[-1][
+                "content"
+            ]
+        )[-1]["refusal"]
         == "I cannot continue that request."
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cut", [4, 5, 6, 7])
-async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
+async def test_recovery_emits_only_missing_text_completion_stages(cut: int) -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -224,7 +228,10 @@ async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
     counts = Counter(
         event.event
         for event in events
-        if event.data.get("item_id", event.data.get("item", {}).get("id")) == "msg_text"
+        if event.data.get(
+            "item_id", object_payload(event.data.get("item", {})).get("id")
+        )
+        == "msg_text"
     )
     for kind in (
         "response.output_text.done",
@@ -241,7 +248,7 @@ async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
 @pytest.mark.parametrize("cut", [4, 5, 6])
 async def test_handoff_snapshot_matches_published_closures(
     monkeypatch: pytest.MonkeyPatch, limited: bool, continued: bool, cut: int
-):
+) -> None:
     if limited:
         original = DeliveredResponse.closing_events
 
@@ -288,13 +295,17 @@ async def test_handoff_snapshot_matches_published_closures(
     assert_completed(events, "responses")
     assert len(bodies) == (2 if continued else 1)
     assert "call_abandoned" not in raw
-    output = events[-1].data["response"]["output"]
+    output = object_payload(events[-1].data["response"])["output"]
     assert output == [
         event.data["item"]
         for event in events
         if event.event == "response.output_item.done"
     ]
-    assert all(item["status"] == "completed" for item in output)
+    assert all(
+        object_payload(item)["status"] == "completed" for item in array_payload(output)
+    )
     assert [
-        item["arguments"] for item in output if item["type"] == "function_call"
+        object_payload(item)["arguments"]
+        for item in array_payload(output)
+        if object_payload(item)["type"] == "function_call"
     ] == ['{"path":"kept"}']

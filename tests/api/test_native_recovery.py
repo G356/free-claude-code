@@ -27,6 +27,7 @@ from tests.api.test_request_lifetime import _http_scope
 from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -36,11 +37,11 @@ from tests.providers.test_anthropic_provider import native_body, provider
 @pytest.mark.asyncio
 async def test_native_fallback_tries_other_model_during_primary_cooldown(
     stream: bool, status: int, retry_after: str, max_attempts: int
-):
+) -> None:
     calls = []
 
     def handle(request: httpx.Request):
-        model = json.loads(request.content)["model"]
+        model = decode_object(request.content)["model"]
         calls.append(model)
         if model == "primary":
             return httpx.Response(
@@ -107,12 +108,12 @@ async def test_native_fallback_tries_other_model_during_primary_cooldown(
     assert calls == ["primary", "backup", "backup", "backup"]
 
 
-def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
+def test_only_leading_pings_then_all_candidates_fail_returns_json_error() -> None:
     calls = []
     wires = []
 
     def handle(request: httpx.Request):
-        calls.append(json.loads(request.content)["model"])
+        calls.append(decode_object(request.content)["model"])
         wire = Wire(
             [
                 _sse(
@@ -153,7 +154,7 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
 @pytest.mark.parametrize("disconnect", [False, True])
 async def test_leading_ping_timeout_or_disconnect_releases_all_resources(
     disconnect: bool,
-):
+) -> None:
     entered = asyncio.Event()
     calls = []
 
@@ -257,7 +258,7 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(
         await manager.close()
 
 
-def test_count_generate_and_continue_native_tool_history_with_recovery():
+def test_count_generate_and_continue_native_tool_history_with_recovery() -> None:
     sent = []
     result_block = {
         "type": "future_hosted_result",
@@ -269,7 +270,7 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
     del events[2]
 
     def handle(request: httpx.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         sent.append(body)
         if len(sent) == 1:
             wire = Wire([_sse({"type": "ping"}), httpx.ReadError("retry before start")])
@@ -305,7 +306,7 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
         assert response.status_code == 200, response.text
         output = parse_sse_text(response.text)
         assert output[0].event == "message_start"
-        assert output[0].data["message"]["model"] == body["model"]
+        assert object_payload(output[0].data["message"])["model"] == body["model"]
         returned = next(
             event.data["content_block"]
             for event in output

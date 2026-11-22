@@ -172,10 +172,10 @@ def test_http_bad_request_beats_transient_body() -> None:
 def test_http_client_network_errors_have_the_same_failure_policy(
     error_name: str,
 ) -> None:
-    errors = [
-        getattr(module, error_name)("connection interrupted")
-        for module in (httpx, httpx2)
-    ]
+    errors: list[Exception] = []
+    for module in (httpx, httpx2):
+        error_type: type[Exception] = getattr(module, error_name)
+        errors.append(error_type("connection interrupted"))
     failures = [
         finalize_provider_failure(
             error, provider_name="TEST", read_timeout_s=10, request_id="request"
@@ -675,7 +675,7 @@ _CASES = (
 )
 
 
-@pytest.mark.parametrize("case", _CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize("case", _CASES, ids=[case.name for case in _CASES])
 def test_raw_provider_failure_maps_to_canonical_failure(
     case: _ClassificationCase,
 ) -> None:
@@ -742,7 +742,7 @@ def test_auth_failure_preserves_model_error_body_instead_of_masking_it() -> None
 
     assert failure.kind is FailureKind.AUTHENTICATION
     assert failure.status_code == 401
-    assert "Category: ModelError" in failure.message
+    assert "Category: authentication" in failure.message
     assert "Provider authentication failed. Check API key." in failure.message
     assert "Model qwen3.7-max is not supported for format oa-compat" in failure.message
     assert "Request ID: req_model" in failure.message
@@ -887,7 +887,9 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
 
 
 @pytest.mark.parametrize("deadline", [None, 1234.0])
-def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline: float | None):
+def test_recovery_rewrap_preserves_selected_cause_and_deadline(
+    deadline: float | None,
+) -> None:
     cause = RuntimeError("selected upstream error")
     first = ProviderRecoveryExhausted(cause, retry_not_before=deadline)
     copied = ProviderRecoveryExhausted(first)

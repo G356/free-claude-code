@@ -24,6 +24,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def make_request(**overrides: object):
@@ -43,7 +44,7 @@ def mistral_provider(mistral_config: ProviderConfig):
     return MistralProvider(mistral_config, admission=immediate_admission())
 
 
-def test_init(mistral_config: ProviderConfig):
+def test_init(mistral_config: ProviderConfig) -> None:
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -54,7 +55,7 @@ def test_init(mistral_config: ProviderConfig):
         mock_openai.assert_called_once()
 
 
-def test_default_base_url():
+def test_default_base_url() -> None:
     assert MISTRAL_DEFAULT_BASE == "https://api.mistral.ai/v1"
 
 
@@ -62,7 +63,7 @@ def test_default_base_url():
 async def test_model_catalog_extracts_exact_input_modalities(
     monkeypatch: pytest.MonkeyPatch,
     mistral_provider: MistralProvider,
-):
+) -> None:
     monkeypatch.setattr(
         mistral_provider._client.models,
         "list",
@@ -120,7 +121,7 @@ async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
     monkeypatch: pytest.MonkeyPatch,
     mistral_provider: MistralProvider,
     capabilities: JsonObject | None,
-):
+) -> None:
     model: JsonObject = {"id": "model"}
     if capabilities is not None:
         model["capabilities"] = capabilities
@@ -135,19 +136,19 @@ async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
     )
 
 
-def test_build_request_body_basic(mistral_provider: MistralProvider):
+def test_build_request_body_basic(mistral_provider: MistralProvider) -> None:
     """Basic request body conversion works for Mistral."""
     req = make_request()
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["model"] == "devstral-small-latest"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert body["reasoning_effort"] == "high"
 
 
 def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -179,11 +180,15 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
 
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
-    assert body["messages"][0]["reasoning_content"] == "Need the tool."
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "Need the tool."
+    )
     body = mistral_provider._behavior.prepare_history_body(
         body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
     )
-    assistant = body["messages"][0]
+    messages: list[JsonObject] = body["messages"]
+    assistant = messages[0]
     assert "reasoning_content" not in assistant
     assert assistant["content"] == [
         {
@@ -192,12 +197,12 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
         },
         {"type": "text", "text": "Calling the tool."},
     ]
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
+    assert object_array(assistant["tool_calls"])[0]["id"] == "toolu_1"
 
 
 def test_build_request_body_preserves_tools_tool_choice_and_params(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request(
         tools=[
             {
@@ -220,11 +225,16 @@ def test_build_request_body_preserves_tools_tool_choice_and_params(
     assert body["temperature"] == 0.5
     assert body["top_p"] == 0.9
     assert body["stop"] == ["STOP"]
-    assert body["tools"][0]["function"]["name"] == "echo"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "echo"
+    )
     assert body["tool_choice"] == {"type": "function", "function": {"name": "echo"}}
 
 
-def test_build_request_body_reasoning_off_uses_native_none():
+def test_build_request_body_reasoning_off_uses_native_none() -> None:
     provider = MistralProvider(
         make_provider_config(
             api_key="test_mistral_key",
@@ -236,10 +246,12 @@ def test_build_request_body_reasoning_off_uses_native_none():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
-    assert all("reasoning_content" not in m for m in body.get("messages", []))
+    assert all(
+        "reasoning_content" not in m for m in object_array(body.get("messages", []))
+    )
 
 
-def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
+def test_reasoning_off_keeps_replay_separate_from_new_turn_compute() -> None:
     provider = MistralProvider(
         make_provider_config(
             api_key="test_mistral_key",
@@ -263,7 +275,10 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
-    assert body["messages"][0]["reasoning_content"] == "Hidden."
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "Hidden."
+    )
     body = provider._behavior.prepare_history_body(
         body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
     )
@@ -277,7 +292,7 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(mistral_provider: MistralProvider):
+async def test_stream_messages_text(mistral_provider: MistralProvider) -> None:
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -314,7 +329,9 @@ async def test_stream_messages_text(mistral_provider: MistralProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(mistral_provider: MistralProvider):
+async def test_stream_messages_reasoning_content(
+    mistral_provider: MistralProvider,
+) -> None:
     """reasoning_content deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -353,7 +370,7 @@ async def test_stream_messages_reasoning_content(mistral_provider: MistralProvid
 @pytest.mark.asyncio
 async def test_stream_messages_native_mistral_thinking_chunk(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -396,7 +413,7 @@ async def test_stream_messages_native_mistral_thinking_chunk(
 @pytest.mark.asyncio
 async def test_stream_messages_native_mistral_text_chunk(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -432,7 +449,7 @@ async def test_stream_messages_native_mistral_text_chunk(
 @pytest.mark.asyncio
 async def test_stream_messages_preserves_native_thinking_and_string_text(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = sdk_chat_chunk(
@@ -476,7 +493,7 @@ async def test_stream_messages_preserves_native_thinking_and_string_text(
 @pytest.mark.asyncio
 async def test_stream_messages_preserves_native_reasoning_and_string_text(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = sdk_chat_chunk(
@@ -518,7 +535,7 @@ async def test_stream_messages_preserves_native_reasoning_and_string_text(
 @pytest.mark.asyncio
 async def test_stream_messages_preserves_mixed_native_content_array(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -562,7 +579,7 @@ async def test_stream_messages_preserves_mixed_native_content_array(
 @pytest.mark.asyncio
 async def test_stream_messages_ignores_unknown_native_content_chunks(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -605,7 +622,7 @@ async def test_stream_messages_ignores_unknown_native_content_chunks(
 @pytest.mark.asyncio
 async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -651,7 +668,7 @@ async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
 @pytest.mark.asyncio
 async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -724,7 +741,7 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
 @pytest.mark.asyncio
 async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -790,7 +807,7 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
 @pytest.mark.asyncio
 async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -832,7 +849,7 @@ async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
 @pytest.mark.asyncio
 async def test_stream_messages_retries_when_model_disables_reasoning_input(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -881,7 +898,7 @@ async def test_stream_messages_retries_when_model_disables_reasoning_input(
 @pytest.mark.asyncio
 async def test_stream_messages_unrelated_bad_request_does_not_retry(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
     error = _make_bad_request_error("Unsupported field: top_k")
 
@@ -904,7 +921,7 @@ async def test_stream_messages_unrelated_bad_request_does_not_retry(
 @pytest.mark.asyncio
 async def test_stream_messages_generic_thinking_error_does_not_retry(
     mistral_provider: MistralProvider,
-):
+) -> None:
     req = make_request()
     error = _make_bad_request_error("The model was thinking, but top_k is unsupported")
 
@@ -924,7 +941,9 @@ async def test_stream_messages_generic_thinking_error_does_not_retry(
     assert "Invalid request sent to provider" in exc_info.value.message
 
 
-def test_retry_body_without_reasoning_returns_none(mistral_provider: MistralProvider):
+def test_retry_body_without_reasoning_returns_none(
+    mistral_provider: MistralProvider,
+) -> None:
     body = {"model": "x", "messages": [{"role": "user", "content": "hi"}]}
 
     assert (
@@ -936,7 +955,7 @@ def test_retry_body_without_reasoning_returns_none(mistral_provider: MistralProv
 
 
 @pytest.mark.asyncio
-async def test_cleanup(mistral_provider: MistralProvider):
+async def test_cleanup(mistral_provider: MistralProvider) -> None:
     """cleanup closes the OpenAI client."""
     mistral_provider._client = AsyncMock()
 

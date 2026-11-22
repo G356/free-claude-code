@@ -1,6 +1,5 @@
 """Tests for config/logging_config.py."""
 
-import json
 import logging
 import subprocess
 import sys
@@ -12,13 +11,15 @@ from loguru import logger
 
 from free_claude_code.config import logging_config
 from free_claude_code.config.logging_config import configure_logging
+from free_claude_code.core.json_types import load_json_value
+from tests.wire_payload import decode_object, object_payload, string_payload
 
 
 def test_log_capture_does_not_feed_back_into_interception(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(logging.root, "handlers", [logging_config.InterceptHandler()])
     with caplog.at_level(logging.WARNING):
         logger.info("below capture level")
@@ -35,25 +36,27 @@ def test_configure_logging_creates_parent_directories(tmp_path: Path) -> None:
     assert log_file.is_file()
 
 
-def test_native_json_preserves_bound_and_request_context(tmp_path: Path):
+def test_native_json_preserves_bound_and_request_context(tmp_path: Path) -> None:
     log_file = tmp_path / "context.log"
     configure_logging(log_file, force=True)
     with logger.contextualize(request_id="req-test", session_id="session-test"):
         logger.bind(provider_id="provider-test", run_id="run-test").info("completed")
     logger.complete()
-    row = json.loads(log_file.read_text(encoding="utf-8"))
-    assert row["record"]["extra"] == {
+    row = decode_object(log_file.read_text(encoding="utf-8"))
+    assert object_payload(row["record"])["extra"] == {
         "request_id": "req-test",
         "session_id": "session-test",
         "provider_id": "provider-test",
         "run_id": "run-test",
     }
-    assert row["record"]["level"]["name"] == "INFO"
-    assert row["record"]["message"] == "completed"
+    assert object_payload(object_payload(row["record"])["level"])["name"] == "INFO"
+    assert object_payload(row["record"])["message"] == "completed"
 
 
 @pytest.mark.parametrize("stdlib", [False, True])
-def test_native_json_preserves_exception_chain_and_stack(tmp_path: Path, stdlib: bool):
+def test_native_json_preserves_exception_chain_and_stack(
+    tmp_path: Path, stdlib: bool
+) -> None:
     log_file = tmp_path / "exception.log"
     configure_logging(log_file, force=True)
     try:
@@ -69,21 +72,23 @@ def test_native_json_preserves_exception_chain_and_stack(tmp_path: Path, stdlib:
     logger.complete()
     rows = log_file.read_text(encoding="utf-8").splitlines()
     assert len(rows) == 1
-    row = json.loads(rows[0])
-    assert row["record"]["exception"] == {
+    row = decode_object(rows[0])
+    assert object_payload(row["record"])["exception"] == {
         "type": "RuntimeError",
         "value": "provider request failed",
         "traceback": True,
     }
-    assert "ValueError: upstream HTTP 429: rate limited" in row["text"]
-    assert "RuntimeError: provider request failed" in row["text"]
-    assert "test_native_json_preserves_exception_chain_and_stack" in row["text"]
+    assert "ValueError: upstream HTTP 429: rate limited" in string_payload(row["text"])
+    assert "RuntimeError: provider request failed" in string_payload(row["text"])
+    assert "test_native_json_preserves_exception_chain_and_stack" in string_payload(
+        row["text"]
+    )
 
 
 @pytest.mark.parametrize("stdlib", [False, True])
 def test_exception_logs_omit_local_values_but_keep_explicit_context(
     tmp_path: Path, stdlib: bool
-):
+) -> None:
     log_file = tmp_path / "exception.log"
     configure_logging(log_file, force=True)
     secret = "DUMMY_EXCEPTION_CREDENTIAL"
@@ -100,14 +105,16 @@ def test_exception_logs_omit_local_values_but_keep_explicit_context(
 
     text = log_file.read_text(encoding="utf-8")
     assert secret not in text
-    row = json.loads(text)
-    assert row["record"]["extra"]["attempt"] == 2
-    assert row["record"]["message"] == "request failed"
-    assert row["record"]["exception"]["traceback"] is True
-    assert "KeyError: 'Request-ID'" in row["text"]
+    row = decode_object(text)
+    assert object_payload(object_payload(row["record"])["extra"])["attempt"] == 2
+    assert object_payload(row["record"])["message"] == "request failed"
+    assert (
+        object_payload(object_payload(row["record"])["exception"])["traceback"] is True
+    )
+    assert "KeyError: 'Request-ID'" in string_payload(row["text"])
 
 
-def test_logging_preserves_records_across_process_restarts(tmp_path: Path):
+def test_logging_preserves_records_across_process_restarts(tmp_path: Path) -> None:
     log_file = tmp_path / "server.log"
     script = """
 import sys
@@ -127,15 +134,19 @@ logger.remove()
             timeout=10,
         )
     records = [
-        json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+        load_json_value(line)
+        for line in log_file.read_text(encoding="utf-8").splitlines()
     ]
-    assert [record["record"]["message"] for record in records] == [
+    assert [
+        object_payload(object_payload(record)["record"])["message"]
+        for record in records
+    ] == [
         "first run",
         "second run",
     ]
 
 
-def test_forced_logging_reconfiguration_preserves_records(tmp_path: Path):
+def test_forced_logging_reconfiguration_preserves_records(tmp_path: Path) -> None:
     log_file = tmp_path / "server.log"
     configure_logging(log_file, force=True)
     logger.info("before reconfiguration")
@@ -143,15 +154,19 @@ def test_forced_logging_reconfiguration_preserves_records(tmp_path: Path):
     logger.info("after reconfiguration")
     logger.complete()
     records = [
-        json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+        load_json_value(line)
+        for line in log_file.read_text(encoding="utf-8").splitlines()
     ]
-    assert [record["record"]["message"] for record in records] == [
+    assert [
+        object_payload(object_payload(record)["record"])["message"]
+        for record in records
+    ] == [
         "before reconfiguration",
         "after reconfiguration",
     ]
 
 
-def test_configure_logging_writes_json_to_file(tmp_path: Path):
+def test_configure_logging_writes_json_to_file(tmp_path: Path) -> None:
     """configure_logging writes JSON lines to the specified file."""
     log_file = str(tmp_path / "test.log")
     configure_logging(log_file, force=True)
@@ -171,11 +186,15 @@ def test_configure_logging_writes_json_to_file(tmp_path: Path):
 
     # Each line should be valid JSON
     for line in lines:
-        record = json.loads(line)
-        assert "text" in record or "message" in record or "record" in record
+        record = load_json_value(line)
+        assert (
+            "text" in object_payload(record)
+            or "message" in object_payload(record)
+            or "record" in object_payload(record)
+        )
 
 
-def test_configure_logging_idempotent(tmp_path: Path):
+def test_configure_logging_idempotent(tmp_path: Path) -> None:
     """configure_logging is idempotent - safe to call twice with force."""
     log_file = str(tmp_path / "test.log")
     configure_logging(log_file, force=True)
@@ -185,7 +204,7 @@ def test_configure_logging_idempotent(tmp_path: Path):
     logger.info("After second configure")
 
 
-def test_configure_logging_replaces_sink_when_path_changes(tmp_path: Path):
+def test_configure_logging_replaces_sink_when_path_changes(tmp_path: Path) -> None:
     """A path-only restart switches destinations without truncating either file."""
     first_log = tmp_path / "first.log"
     second_log = tmp_path / "nested" / "second.log"
@@ -214,16 +233,16 @@ def test_configure_logging_replaces_sink_when_path_changes(tmp_path: Path):
         "first line\nsecond line \u2603",
     ],
 )
-def test_native_json_preserves_message_text(tmp_path: Path, message: str):
+def test_native_json_preserves_message_text(tmp_path: Path, message: str) -> None:
     log_file = tmp_path / "message.log"
     configure_logging(log_file, force=True)
     logger.info(message)
     logger.complete()
     lines = log_file.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    row = json.loads(lines[0])
-    assert row["record"]["message"] == message
-    assert message in row["text"]
+    row = decode_object(lines[0])
+    assert object_payload(row["record"])["message"] == message
+    assert string_payload(message) in string_payload(row["text"])
 
 
 def test_noisy_third_party_loggers_quieted_when_not_verbose(tmp_path: Path) -> None:

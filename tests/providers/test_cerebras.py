@@ -17,6 +17,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(model: str = "llama3.1-8b", **overrides: object):
@@ -70,7 +71,7 @@ def cerebras_provider(cerebras_config: ProviderConfig):
     )
 
 
-def test_init(cerebras_config: ProviderConfig):
+def test_init(cerebras_config: ProviderConfig) -> None:
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -83,11 +84,11 @@ def test_init(cerebras_config: ProviderConfig):
         mock_openai.assert_called_once()
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert CEREBRAS_DEFAULT_BASE == "https://api.cerebras.ai/v1"
 
 
-def test_build_request_body_basic(cerebras_provider: OpenAIChatProvider):
+def test_build_request_body_basic(cerebras_provider: OpenAIChatProvider) -> None:
     """Basic request body conversion attaches system message from Claude request."""
     req = make_request()
     body = cerebras_provider._chat._build_request_body(
@@ -95,36 +96,41 @@ def test_build_request_body_basic(cerebras_provider: OpenAIChatProvider):
     )
 
     assert body["model"] == "llama3.1-8b"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "max_completion_tokens" in body
 
 
 def test_build_request_body_replays_reasoning_in_native_field(
     cerebras_provider: OpenAIChatProvider,
-):
+) -> None:
     body = cerebras_provider._chat._build_request_body(
         make_reasoning_tool_history_request()
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["content"] == "I will inspect the file."
-    assert assistant["reasoning"] == "I need to read it first."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
-    assert body["messages"][-1] == {
+    assert object_payload(assistant)["content"] == "I will inspect the file."
+    assert object_payload(assistant)["reasoning"] == "I need to read it first."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
+    assert array_payload(body["messages"])[-1] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
     }
     assert all(
-        "reasoning" not in message
-        for message in body["messages"]
-        if message["role"] != "assistant"
+        "reasoning" not in object_payload(message)
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] != "assistant"
     )
 
 
-def test_replay_is_independent_of_current_turn_reasoning_control():
+def test_replay_is_independent_of_current_turn_reasoning_control() -> None:
     provider = profiled_provider(
         "cerebras",
         make_provider_config(
@@ -138,17 +144,22 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["content"] == "I will inspect the file."
-    assert assistant["reasoning"] == "I need to read it first."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
+    assert object_payload(assistant)["content"] == "I will inspect the file."
+    assert object_payload(assistant)["reasoning"] == "I need to read it first."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
     assert body["reasoning_effort"] == "none"
 
 
 def test_build_request_body_remaps_max_tokens_preserves_message_name(
     cerebras_provider: OpenAIChatProvider,
-):
+) -> None:
     """Cerebras does not strip message ``name``; ``max_tokens`` maps to completion field."""
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
@@ -163,14 +174,14 @@ def test_build_request_body_remaps_max_tokens_preserves_message_name(
             req, reasoning=reasoning_for(req)
         )
 
-    assert body["messages"][0].get("name") == "alice"
+    assert object_payload(array_payload(body["messages"])[0]).get("name") == "alice"
     assert body.get("max_tokens") is None
     assert body["max_completion_tokens"] == 42
 
 
 def test_build_request_body_prefers_existing_max_completion_tokens(
     cerebras_provider: OpenAIChatProvider,
-):
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -188,7 +199,7 @@ def test_build_request_body_prefers_existing_max_completion_tokens(
 
 def test_build_request_body_preserves_caller_extra_body(
     cerebras_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(extra_body={"clear_thinking": False})
 
     body = cerebras_provider._chat._build_request_body(
@@ -201,7 +212,7 @@ def test_build_request_body_preserves_caller_extra_body(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(cerebras_provider: OpenAIChatProvider):
+async def test_stream_messages_text(cerebras_provider: OpenAIChatProvider) -> None:
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -238,7 +249,7 @@ async def test_stream_messages_text(cerebras_provider: OpenAIChatProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning(cerebras_provider: OpenAIChatProvider):
+async def test_stream_messages_reasoning(cerebras_provider: OpenAIChatProvider) -> None:
     """Cerebras reasoning deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -275,7 +286,7 @@ async def test_stream_messages_reasoning(cerebras_provider: OpenAIChatProvider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(cerebras_provider: OpenAIChatProvider):
+async def test_cleanup(cerebras_provider: OpenAIChatProvider) -> None:
     cerebras_provider._client = AsyncMock()
 
     await cerebras_provider.cleanup()

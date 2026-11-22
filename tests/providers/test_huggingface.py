@@ -21,6 +21,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -42,11 +43,13 @@ def huggingface_provider(huggingface_config: ProviderConfig):
     )
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert HUGGINGFACE_DEFAULT_BASE == "https://router.huggingface.co/v1"
 
 
-def test_init_uses_default_base_url_and_api_key(huggingface_config: ProviderConfig):
+def test_init_uses_default_base_url_and_api_key(
+    huggingface_config: ProviderConfig,
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
@@ -59,7 +62,7 @@ def test_init_uses_default_base_url_and_api_key(huggingface_config: ProviderConf
     mock_openai.assert_called_once()
 
 
-def test_init_strips_trailing_slash(huggingface_config: ProviderConfig):
+def test_init_strips_trailing_slash(huggingface_config: ProviderConfig) -> None:
     config = replace(huggingface_config, base_url=f"{HUGGINGFACE_DEFAULT_BASE}/")
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -147,7 +150,9 @@ async def test_model_catalog_requires_consensus_across_live_huggingface_routes(
     )
 
 
-def test_build_request_body_keeps_max_tokens(huggingface_provider: OpenAIChatProvider):
+def test_build_request_body_keeps_max_tokens(
+    huggingface_provider: OpenAIChatProvider,
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -164,14 +169,14 @@ def test_build_request_body_keeps_max_tokens(huggingface_provider: OpenAIChatPro
         mock_convert.call_args.kwargs["reasoning_replay"]
         is ReasoningReplayMode.REASONING_CONTENT
     )
-    assert body["messages"][0].get("name") == "alice"
+    assert object_payload(array_payload(body["messages"])[0]).get("name") == "alice"
     assert body["max_tokens"] == 42
     assert "max_completion_tokens" not in body
 
 
 def test_build_request_body_preserves_caller_extra_body(
     huggingface_provider: OpenAIChatProvider,
-):
+) -> None:
     extra_body = {"provider": "auto", "routing": {"bill_to": "my-org"}}
     req = make_request(extra_body=extra_body)
 
@@ -179,7 +184,7 @@ def test_build_request_body_preserves_caller_extra_body(
 
     assert body["extra_body"] == extra_body
     assert body["extra_body"] is not extra_body
-    assert body["extra_body"]["routing"] is not extra_body["routing"]
+    assert object_payload(body["extra_body"])["routing"] is not extra_body["routing"]
 
 
 @pytest.mark.parametrize(
@@ -192,7 +197,7 @@ def test_build_request_body_preserves_caller_extra_body(
 )
 def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
     huggingface_provider: OpenAIChatProvider, reasoning: ReasoningPolicy
-):
+) -> None:
     body = huggingface_provider._chat._build_request_body(
         make_request(),
         reasoning=reasoning,
@@ -206,7 +211,7 @@ def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
 
 def test_build_request_body_keeps_prior_thinking_in_native_field(
     huggingface_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -229,13 +234,16 @@ def test_build_request_body_keeps_prior_thinking_in_native_field(
             "reasoning_content": "hidden prior thought",
         }
     ]
-    assert body["messages"][0]["reasoning_content"] == "hidden prior thought"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "hidden prior thought"
+    )
     assert "hidden prior thought" in str(body)
 
 
 def test_build_request_body_keeps_top_level_reasoning_in_native_field(
     huggingface_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(
         system=None,
         messages=[
@@ -260,7 +268,7 @@ def test_build_request_body_keeps_top_level_reasoning_in_native_field(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(huggingface_provider: OpenAIChatProvider):
+async def test_stream_messages_text(huggingface_provider: OpenAIChatProvider) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -297,7 +305,7 @@ async def test_stream_messages_text(huggingface_provider: OpenAIChatProvider):
 @pytest.mark.asyncio
 async def test_stream_messages_reasoning_content(
     huggingface_provider: OpenAIChatProvider,
-):
+) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -332,7 +340,7 @@ async def test_stream_messages_reasoning_content(
 
 
 @pytest.mark.asyncio
-async def test_cleanup(huggingface_provider: OpenAIChatProvider):
+async def test_cleanup(huggingface_provider: OpenAIChatProvider) -> None:
     huggingface_provider._client = AsyncMock()
 
     await huggingface_provider.cleanup()

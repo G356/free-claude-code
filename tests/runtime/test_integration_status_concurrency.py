@@ -1,7 +1,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -22,7 +22,7 @@ from tests.wire_payload import object_payload
 @pytest.mark.asyncio
 async def test_slow_integration_writer_does_not_block_another(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
 
@@ -47,7 +47,7 @@ async def test_slow_integration_writer_does_not_block_another(
 @pytest.mark.asyncio
 async def test_queued_integration_writer_does_not_block_another(
     runtime: ApplicationRuntime,
-):
+) -> None:
     update = runtime._integrations._vscode_update
     first = None
     try:
@@ -76,7 +76,7 @@ async def test_queued_integration_writer_does_not_block_another(
 )
 async def test_slow_status_does_not_block_other_integration(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch, other: str
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
 
@@ -89,7 +89,8 @@ async def test_slow_status_does_not_block_other_integration(
     task = asyncio.create_task(runtime.vscode_chat_status())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        result = await asyncio.wait_for(getattr(runtime, other)(), 1)
+        status: Callable[[], Awaitable[JsonObject]] = getattr(runtime, other)
+        result = await asyncio.wait_for(status(), 1)
         assert result["connected"] is False
         assert not task.done()
     finally:
@@ -101,7 +102,7 @@ async def test_slow_status_does_not_block_other_integration(
 @pytest.mark.asyncio
 async def test_cancelled_reader_drains_before_writer_enters(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, writer_entered, release = (
         asyncio.Event(),
         asyncio.Event(),
@@ -162,7 +163,7 @@ async def test_cancelled_reader_drains_before_writer_enters(
 @pytest.mark.asyncio
 async def test_status_cannot_observe_partial_multifile_write(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
     atomic = claude_onboarding.atomic_write_text
@@ -200,7 +201,7 @@ async def test_status_cannot_observe_partial_multifile_write(
 @pytest.mark.parametrize("first", ["connect", "complete"])
 async def test_connect_and_onboarding_share_write_ownership(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch, first: str
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
     complete = claude_onboarding.complete
@@ -254,7 +255,7 @@ async def test_connect_and_onboarding_share_write_ownership(
 @pytest.mark.asyncio
 async def test_cancelled_onboarding_write_is_drained_before_shutdown(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
     complete = claude_onboarding.complete
@@ -294,7 +295,7 @@ async def test_cancelled_onboarding_write_is_drained_before_shutdown(
 @pytest.mark.asyncio
 async def test_continuously_changed_generation_has_bounded_retry(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, release = asyncio.Queue(), threading.Semaphore(0)
     loop = asyncio.get_running_loop()
 
@@ -330,7 +331,7 @@ async def test_continuously_changed_generation_has_bounded_retry(
 @pytest.mark.parametrize("change", ["restart", "shutdown"])
 async def test_availability_is_rechecked_after_status_worker(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch, change: str
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
 
@@ -359,7 +360,7 @@ async def test_availability_is_rechecked_after_status_worker(
 @pytest.mark.asyncio
 async def test_startup_finishing_during_skipped_status_repeats_inspection(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     update = runtime._integrations._claude_update
     update.state = "starting"
     loop = asyncio.get_running_loop()
@@ -391,7 +392,7 @@ async def test_startup_finishing_during_skipped_status_repeats_inspection(
 @pytest.mark.asyncio
 async def test_same_integration_status_readers_overlap(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     both_entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
     count = 0
@@ -421,7 +422,7 @@ async def test_same_integration_status_readers_overlap(
 @pytest.mark.parametrize("first_failure", [False, True])
 async def test_generation_change_discards_old_status_outcome(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch, first_failure: bool
-):
+) -> None:
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
     tokens = []

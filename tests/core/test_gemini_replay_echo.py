@@ -30,6 +30,12 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from tests.core.test_gemini_requests import build, request
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    string_payload,
+)
 
 ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "model")
 
@@ -64,7 +70,9 @@ def generated():
         "multiple_bundles",
     ],
 )
-def test_only_exact_single_bundle_echo_is_suppressed(protocol: WireProtocol, echo: str):
+def test_only_exact_single_bundle_echo_is_suppressed(
+    protocol: WireProtocol, echo: str
+) -> None:
     parts = generated()
     signature = parts[-1]["thoughtSignature"]
     assert isinstance(signature, str)
@@ -130,7 +138,7 @@ def test_only_exact_single_bundle_echo_is_suppressed(protocol: WireProtocol, ech
         {"reasoning": "a", "reasoning_content": "b", "reasoning_details": []},
     ],
 )
-def test_plain_native_chat_replay_round_trips(native: JsonObject):
+def test_plain_native_chat_replay_round_trips(native: JsonObject) -> None:
     record = ReplayRecord(ORIGIN, native)
     assert decode_replay(encode_replay(record)) == record
 
@@ -145,27 +153,29 @@ def test_plain_native_chat_replay_round_trips(native: JsonObject):
         {"reasoning_details": "bad", "reasoning_content": "good"},
     ],
 )
-def test_native_chat_replay_rejects_invalid_recognized_fields(native: JsonObject):
+def test_native_chat_replay_rejects_invalid_recognized_fields(
+    native: JsonObject,
+) -> None:
     with pytest.raises(HistoryReplayError):
         encode_replay(ReplayRecord(ORIGIN, native))
 
 
 @pytest.mark.parametrize("digest", [None, "bad", 17, "g" * 64])
-def test_bundle_rejects_invalid_echo_digest(digest: int | str | None):
+def test_bundle_rejects_invalid_echo_digest(digest: int | str | None) -> None:
     import base64
 
     from free_claude_code.core.gemini import GeminiConversionError
 
     value = base64.b64decode(encode_bundle(ReplayBundle("response")))
     prefix, payload = value.split(b":v1:", 1)
-    data = json.loads(payload)
+    data = decode_object(payload)
     data["thought_echo_sha256"] = digest
     invalid = base64.b64encode(prefix + b":v1:" + json.dumps(data).encode()).decode()
     with pytest.raises(GeminiConversionError):
         decode_bundle(invalid)
 
 
-def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
+def test_native_aggregate_alias_does_not_duplicate_structured_full_text() -> None:
     native = {
         "reasoning_content": "firstsecond",
         "reasoning_details": [
@@ -182,7 +192,7 @@ def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
+def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool) -> None:
     output = GeminiOutput("response", "model", include_thoughts=True)
     output.capture_call(
         CallReplay(ORIGIN, "call", {"google": {"thought_signature": "opaque"}})
@@ -199,8 +209,16 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
     aggregate = GeminiResponseAccumulator()
     for event in parse_sse_text("".join(frames)):
         aggregate.feed(event.data)
-    content = aggregate.result()["candidates"][0]["content"]
-    bundle = decode_bundle(content["parts"][-1]["thoughtSignature"])
+    content = object_payload(array_payload(aggregate.result()["candidates"])[0])[
+        "content"
+    ]
+    bundle = decode_bundle(
+        string_payload(
+            object_payload(array_payload(object_payload(content)["parts"])[-1])[
+                "thoughtSignature"
+            ]
+        )
+    )
     assert bundle is not None and bundle.thought_echo_sha256 is None
     value = request(
         contents=[
@@ -226,7 +244,7 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
 @pytest.mark.parametrize("placement", ["text", "standalone", "call"])
 def test_foreign_native_gemini_signature_fails_explicitly(
     protocol: str, placement: str
-):
+) -> None:
     from free_claude_code.core.gemini import GeminiConversionError
 
     part: JsonObject = {"thoughtSignature": "AP8="}
